@@ -6,11 +6,11 @@ Tài liệu này là quy trình bắt buộc để năm thành viên cùng làm 
 
 1. Chọn task trong Sheet 02 và đọc dependency, đầu ra cùng điều kiện hoàn thành.
 2. Tạo GitHub Issue với đúng mã task, owner, test và Definition of Done.
-3. Đồng bộ `main` trước khi bắt đầu:
+3. Đồng bộ `develop` trước khi bắt đầu:
 
    ```bash
-   git switch main
-   git pull origin main
+   git switch develop
+   git pull origin develop
    ```
 
 4. Tạo branch theo mẫu `feature/<Task-ID>-<ten-ngan>`:
@@ -32,7 +32,7 @@ Tài liệu này là quy trình bắt buộc để năm thành viên cùng làm 
    git push -u origin feature/T07-chat-win-result
    ```
 
-7. Mở Pull Request vào `main`, điền đủ template và dùng `Closes #<issue>`.
+7. Mở Pull Request vào `develop`, điền đủ template và dùng `Closes #<issue>`.
 8. Một thành viên khác review code và test. Tác giả không tự approve PR của mình.
 9. Chỉ merge khi CI xanh và đã có approval; ưu tiên **Squash and merge**.
 10. Sau khi merge, cập nhật trạng thái, phần trăm hoàn thành, Issue, PR, reviewer và blocker trong Sheet 02.
@@ -44,6 +44,12 @@ Tài liệu này là quy trình bắt buộc để năm thành viên cùng làm 
 - `docs/T14-report`: tài liệu và báo cáo.
 
 Không dùng mã task trong các tab `LEGACY`.
+
+## Vai trò của develop và main
+
+- `develop` nhận Pull Request của các task S01-S04, T01-T15 và X01-X03 trong quá trình phát triển.
+- `main` chỉ nhận Pull Request phát hành từ `develop` khi toàn bộ đồ án đã đạt gate cuối, CI xanh và nhóm duyệt.
+- Không mở Pull Request feature trực tiếp vào `main`.
 
 ## Quy ước commit
 
@@ -59,7 +65,7 @@ Không commit `.env`, token, mật khẩu, khóa riêng, file build hoặc log l
 
 ## Checklist Pull Request
 
-- [ ] Branch được tạo từ `main` mới nhất.
+- [ ] Branch được tạo từ `develop` mới nhất.
 - [ ] PR liên kết Issue bằng `Closes #...`.
 - [ ] Scope chỉ thuộc một task hoặc một mục đích rõ ràng.
 - [ ] Build và test local đã chạy.
@@ -73,8 +79,8 @@ Không commit `.env`, token, mật khẩu, khóa riêng, file build hoặc log l
 - [x] Repository chung đã được tạo.
 - [x] Có `CONTRIBUTING.md`, Issue template và Pull Request template.
 - [x] Có workflow CI ban đầu.
-- [ ] Bật branch protection hoặc ruleset cho `main`.
+- [ ] Đặt `develop` làm default branch trên GitHub.
+- [ ] Bật branch protection hoặc ruleset cho cả `develop` và `main`.
 - [ ] Cả năm thành viên clone repository thành công.
 - [ ] Cả năm thành viên tạo branch, commit, push và mở PR thử.
 - [ ] Mỗi PR thử có ít nhất một thành viên khác review.
-
