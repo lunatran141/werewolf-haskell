@@ -1,0 +1,18 @@
+services:
+  server:
+    build:
+      context: .
+      target: runtime
+    environment:
+      APP_PORT: ${APP_PORT:-8080}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    ports:
+      - "${APP_PORT:-8080}:${APP_PORT:-8080}"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://127.0.0.1:${APP_PORT:-8080}/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+

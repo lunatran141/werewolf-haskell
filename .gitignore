@@ -1,0 +1,8 @@
+dist-newstyle/
+.env
+.idea/
+.vscode/
+*.hi
+*.o
+*.exe
+

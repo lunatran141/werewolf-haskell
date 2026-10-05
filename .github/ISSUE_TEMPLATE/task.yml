@@ -1,0 +1,32 @@
+name: Task
+description: Tạo task theo mã trong Sheet 02
+title: "[TASK] "
+labels: ["task"]
+body:
+  - type: input
+    id: task-code
+    attributes:
+      label: Mã task
+      placeholder: S01, S02, T07...
+    validations:
+      required: true
+  - type: textarea
+    id: goal
+    attributes:
+      label: Mục tiêu và đầu ra
+    validations:
+      required: true
+  - type: textarea
+    id: tests
+    attributes:
+      label: Test / điều kiện hoàn thành
+    validations:
+      required: true
+  - type: dropdown
+    id: owner
+    attributes:
+      label: Thành viên phụ trách
+      options: [TV1, TV2, TV3, TV4, TV5, Cả nhóm]
+    validations:
+      required: true
+
