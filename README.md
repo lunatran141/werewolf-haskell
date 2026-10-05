@@ -11,12 +11,23 @@ docker compose up --build
 
 Kiểm tra health tại <http://localhost:8080/health>. Dừng bằng `docker compose down`.
 
+## Toolchain đã chốt cho S02
+
+- GHC 9.6.6
+- Cabal 3.10
+
+Local, Docker và GitHub Actions phải dùng cùng phiên bản chính này để tránh tình trạng một máy build được nhưng máy khác không build được.
+
+Trên Windows, nên clone repository vào đường dẫn chỉ có ký tự ASCII, ví dụ `C:\dev\werewolf-haskell`. Một số phiên bản GHC/Cabal có thể lỗi package database khi đường dẫn chứa dấu tiếng Việt.
+
 ## Chạy local
 
 Yêu cầu GHC 9.6.6 và Cabal 3.10:
 
 ```bash
 cabal update
+cabal build all
+cabal test all
 cabal run werewolf-server
 ```
 
@@ -36,4 +47,4 @@ test/            Hspec/QuickCheck
 docs/            architecture, game rules, evidence
 ```
 
-Các thư mục chức năng sẽ được bổ sung trong S02 và các task T01–T15.
+S02 chỉ tạo module skeleton có thể build/test. Kiểu dữ liệu, luật và triển khai thật sẽ được bổ sung đúng owner trong T01–T15.

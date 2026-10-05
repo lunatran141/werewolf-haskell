@@ -4,7 +4,10 @@ WORKDIR /src
 COPY cabal.project werewolf-server.cabal ./
 RUN cabal update && cabal build --only-dependencies
 COPY app ./app
-RUN cabal build exe:werewolf-server \
+COPY src ./src
+COPY test ./test
+RUN cabal build all \
+    && cabal test all \
     && mkdir -p /out \
     && cp "$(cabal list-bin exe:werewolf-server)" /out/werewolf-server
 
@@ -20,4 +23,3 @@ EXPOSE 8080
 HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
   CMD curl --fail --silent http://127.0.0.1:${APP_PORT}/health || exit 1
 CMD ["werewolf-server"]
-
