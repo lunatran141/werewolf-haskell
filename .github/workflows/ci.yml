@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 
 permissions:
   contents: read
@@ -27,4 +27,3 @@ jobs:
       - uses: actions/checkout@v4
       - run: docker compose config
       - run: docker build --tag werewolf-server:ci .
-

@@ -2,6 +2,8 @@
 
 Closes #
 
+Base branch thông thường: `develop`. Chỉ Pull Request phát hành cuối mới dùng `main`.
+
 ## Thay đổi
 
 - 
@@ -16,4 +18,3 @@ Closes #
 ## Minh chứng
 
 Ảnh, log hoặc mô tả ngắn:
-

@@ -22,7 +22,7 @@ cabal run werewolf-server
 
 ## Quy trình Git
 
-Đọc [CONTRIBUTING.md](CONTRIBUTING.md). Mỗi thay đổi phải đi theo Issue → branch → PR → review → CI → merge. Nguồn trạng thái duy nhất là Sheet 02; không dùng mã task ở các tab LEGACY.
+Đọc [CONTRIBUTING.md](CONTRIBUTING.md) và [hướng dẫn S01 cho cả nhóm](docs/s01-github-workflow.md). Mỗi thay đổi đi theo Issue → feature branch → PR vào `develop` → review → CI → merge. `main` chỉ nhận PR phát hành cuối từ `develop`. Nguồn trạng thái duy nhất là Sheet 02; không dùng mã task ở các tab LEGACY.
 
 ## Cấu trúc ban đầu
 
