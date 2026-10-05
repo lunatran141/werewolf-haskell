@@ -1,3 +1,5 @@
+{-# LANGUAGE OverloadedStrings #-}
+
 module Main (main) where
 
 import Network.HTTP.Types (status200)
@@ -15,4 +17,3 @@ main = do
 app :: Application
 app _ respond =
   respond (responseLBS status200 [("Content-Type", "application/json")] "{\"status\":\"ok\"}")
-
