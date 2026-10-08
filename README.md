@@ -13,6 +13,8 @@ Kiểm tra health tại <http://localhost:8080/health>. Dừng bằng `docker co
 
 Hướng dẫn clean-clone, healthcheck và CI smoke test nằm trong [tài liệu S03](docs/s03-docker-ci.md).
 
+Kiến trúc phân lớp và luồng `JoinGame` từ Browser đến UI nằm trong [tài liệu S04](docs/architecture.md).
+
 ## Toolchain đã chốt cho S02
 
 - GHC 9.6.6
