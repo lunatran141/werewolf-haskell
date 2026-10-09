@@ -1,6 +1,6 @@
 # Werewolf Haskell
 
-Đồ án Ma Sói online của môn Lập trình hàm. Haskell Server giữ luật và `GameState`; browser chỉ gửi `Command` và hiển thị `Event` do server trả về.
+Haskell Server giữ luật và `GameState`; browser chỉ gửi `Command` và hiển thị `Event` do server trả về.
 
 ## Chạy bằng Docker
 
