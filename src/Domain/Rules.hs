@@ -1,4 +1,3 @@
-```haskell
 -- | Các hàm luật thuần túy của trò chơi Ma Sói.
 -- Module này không chứa IO hay xử lý mạng.
 
@@ -143,4 +142,4 @@ nextPhase Night    = Just Day
 nextPhase Day      = Just Voting
 nextPhase Voting   = Just Night
 nextPhase GameOver = Nothing
-```
+
