@@ -43,3 +43,22 @@ test-suite skeleton-test
   build-depends:
       base >=4.17 && <5
     , werewolf-server
+
+
+-- Bộ kiểm thử dành riêng cho Task T02.
+-- Kiểm tra Smart Constructor, Validation và GameState Invariant.
+-- Sử dụng Hspec cho Unit Test và QuickCheck cho Property Test.
+
+test-suite t02-domain-test
+  type: exitcode-stdio-1.0
+  main-is: T02Main.hs
+  hs-source-dirs: test
+  other-modules:
+      DomainT02Spec
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , werewolf-server
+    , hspec >=2.10
+    , QuickCheck >=2.14
