@@ -62,3 +62,14 @@ test-suite t02-domain-test
     , werewolf-server
     , hspec >=2.10
     , QuickCheck >=2.14
+
+test-suite t03-lobby-test
+  type: exitcode-stdio-1.0
+  main-is: T03LobbySpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , werewolf-server
+    , hspec >=2.10
