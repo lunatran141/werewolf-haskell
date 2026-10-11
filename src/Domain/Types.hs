@@ -1,14 +1,14 @@
 -- | Các kiểu dữ liệu miền của trò chơi sẽ được chốt trong T02.
-
 module Domain.Types where
 
 type PlayerId = String
 
--- Mỗi role thuốc đúng 1 Team; phe được suy ra từ Role.
+-- Mỗi role thuộc đúng 1 Team; phe được suy ra từ Role.
 data Role = Werewolf | Seer | Guard | Witch | Hunter | Villager
   deriving (Eq, Ord, Show, Read, Enum, Bounded)
 
-data Team = Wolves | Village deriving (Eq, Ord, Show, Read)
+data Team = Wolves | Village
+  deriving (Eq, Ord, Show, Read)
 
 teamOfRole :: Role -> Team
 teamOfRole Werewolf = Wolves
@@ -17,9 +17,10 @@ teamOfRole _        = Village
 data Phase = Lobby | Night | Day | Voting | GameOver
   deriving (Eq, Ord, Show, Read, Enum, Bounded)
 
-data LifeStatus = Alive | Dead deriving (Eq, Show, Read)
+data LifeStatus = Alive | Dead
+  deriving (Eq, Show, Read)
 
--- Ket noi thuc te do Server quan ly; Domain khong tu doan socket.
+-- Kết nối thực tế do Server quản lý; Domain không chứa socket.
 data ConnectionStatus = Connected | Disconnected
   deriving (Eq, Show, Read)
 
@@ -32,7 +33,7 @@ data Player = Player
   , playerLifeStatus :: LifeStatus
   } deriving (Eq, Show, Read)
 
--- DTO cho UI; Server ghep ConnectionStatus khi tao snapshot.
+-- DTO cho UI; Server ghép ConnectionStatus khi tạo snapshot.
 data LobbyMember = LobbyMember
   { lobbyMemberId         :: PlayerId
   , lobbyMemberName       :: String
@@ -40,15 +41,15 @@ data LobbyMember = LobbyMember
   , lobbyMemberConnection :: ConnectionStatus
   } deriving (Eq, Show, Read)
 
--- Draw khac voi Nothing (game chua ket thuc).
-data GameResult = Winner Team | Draw deriving (Eq, Show, Read)
+-- Draw khác với Nothing (game chưa kết thúc).
+data GameResult = Winner Team | Draw
+  deriving (Eq, Show, Read)
 
--- LowestPlayerId la bien the cu; Validation phai tu choi.
--- Giu tam constructor de code cu duoc bao loi cau hinh ro rang.
+-- LowestPlayerId là biến thể cũ; Validation phải từ chối.
 data TiePolicy = NoElimination | LowestPlayerId
   deriving (Eq, Show, Read)
 
--- Witch chi mot action / dem. HunterShot chi hop le khi pending.
+-- Witch chỉ một action / đêm. HunterShot chỉ hợp lệ khi pending.
 data NightChoice
   = WolfTarget PlayerId
   | SeerTarget PlayerId
@@ -61,13 +62,13 @@ data NightChoice
   | NoAction
   deriving (Eq, Show, Read)
 
--- T02 dinh nghia lenh; T03--T07 thuc thi state transition.
--- Resolve* va AdvancePhase chi do Server noi bo goi sau authorization.
+-- T02 định nghĩa lệnh; T03--T07 thực thi state transition.
+-- Resolve* và AdvancePhase chỉ do Server nội bộ gọi sau authorization.
 data Command
   = Join PlayerId String
   | Leave PlayerId
   | SetReady PlayerId Bool
-  | StartGame PlayerId
+  | StartGame PlayerId [Role]
   | AdvancePhase
   | NightAction PlayerId NightChoice
   | Vote PlayerId PlayerId
@@ -89,10 +90,11 @@ data GameError
   | DuplicateNightAction | EmptyChat | NotReady
   deriving (Eq, Show, Read)
 
-data EventVisibility = Public | Private PlayerId deriving (Eq, Show)
+data EventVisibility = Public | Private PlayerId
+  deriving (Eq, Show)
 
--- Su kien la contract; T03/Server quyet dinh noi dung snapshot va delivery.
--- Tuyet doi khong broadcast mot event Private den tat ca client.
+-- Sự kiện là contract; T03/Server quyết định nội dung snapshot và delivery.
+-- Không broadcast event Private đến tất cả client.
 data DomainEvent
   = PlayerJoined PlayerId
   | PlayerJoinedDetailed PlayerId String Bool
@@ -119,21 +121,14 @@ data DomainEvent
 eventVisibility :: DomainEvent -> EventVisibility
 eventVisibility event =
   case event of
-    -- Role chi duoc gui rieng cho nguoi nhan vai.
     PlayerRoleAssigned pid _ -> Private pid
-    -- Ket qua soi chi duoc gui cho Seer.
-    SeerResult pid _ -> Private pid
-    -- Xac nhan Night Action chi gui cho nguoi thuc hien.
-    NightActionAccepted pid -> Private pid
-    -- Khong tiet lo lua chon bo phieu cho nguoi khac.
-    VoteUpdated voter _ -> Private voter
-    -- Yeu cau ban chi gui rieng cho Hunter.
-    HunterShotPending pid -> Private pid
-    -- Cac su kien con lai la cong khai.
-    -- Role Reveal chi duoc phat sau khi Player chet.
-    _ -> Public
+    SeerResult pid _         -> Private pid
+    NightActionAccepted pid  -> Private pid
+    VoteUpdated voter _      -> Private voter
+    HunterShotPending pid    -> Private pid
+    _                        -> Public
 
--- Du lieu trang thai nghiep vu; khong chua connection/socket.
+-- Dữ liệu trạng thái nghiệp vụ; không chứa connection/socket.
 data GameState = GameState
   { gamePlayers          :: [Player]
   , gameHost             :: PlayerId
@@ -150,25 +145,41 @@ data GameState = GameState
   , gamePendingReveals   :: [PlayerId]
   , gamePendingHunter    :: Maybe PlayerId
   , gameHunterTriggered  :: Bool
+  , gameNightResolved    :: Bool
+  , gameVotingResolved   :: Bool
   , gameResult           :: Maybe GameResult
   } deriving (Eq, Show)
 
--- Trang thai khoi tao cho room. T03 se thuc thi Join va gan Host dau tien.
+-- Trạng thái khởi tạo cho room. T03 thực thi Join và gán Host đầu tiên.
 emptyLobby :: GameState
 emptyLobby = GameState
-  { gamePlayers = [], gameHost = "", gamePhase = Lobby, gameDay = 0
-  , gameVotes = [], gameNightActions = [], gameConfiguredRoles = []
-  , gameWolfTiePolicy = NoElimination, gameVoteTiePolicy = NoElimination
-  , gameWitchHealReady = True, gameWitchPoisonReady = True
-  , gameLastProtected = Nothing, gamePendingReveals = []
-  , gamePendingHunter = Nothing, gameHunterTriggered = False
+  { gamePlayers = []
+  , gameHost = ""
+  , gamePhase = Lobby
+  , gameDay = 0
+  , gameVotes = []
+  , gameNightActions = []
+  , gameConfiguredRoles = []
+  , gameWolfTiePolicy = NoElimination
+  , gameVoteTiePolicy = NoElimination
+  , gameWitchHealReady = True
+  , gameWitchPoisonReady = True
+  , gameLastProtected = Nothing
+  , gamePendingReveals = []
+  , gamePendingHunter = Nothing
+  , gameHunterTriggered = False
+  , gameNightResolved = False
+  , gameVotingResolved = False
   , gameResult = Nothing
   }
 
--- Dung callback tu Server de truyen thong tin ket noi vao Lobby snapshot.
+-- Dùng callback từ Server để thêm thông tin kết nối vào Lobby snapshot.
 makeLobbyMembers :: GameState -> (PlayerId -> ConnectionStatus) -> [LobbyMember]
 makeLobbyMembers game connectionOf =
-  [ LobbyMember (playerId p) (playerName p) (playerReady p)
+  [ LobbyMember
+      (playerId p)
+      (playerName p)
+      (playerReady p)
       (connectionOf (playerId p))
   | p <- gamePlayers game
   ]

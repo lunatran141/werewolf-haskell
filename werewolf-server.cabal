@@ -21,7 +21,10 @@ library
   ghc-options: -Wall -Wcompat
   build-depends:
       base >=4.17 && <5
-
+      , aeson >=2 && <3
+      , bytestring >=0.11
+      , stm >=2.5 && <3
+      , websockets >=0.12 && <0.14
 executable werewolf-server
   main-is: Main.hs
   hs-source-dirs: app
@@ -33,7 +36,9 @@ executable werewolf-server
     , http-types >=0.12
     , warp >=3.3
     , wai >=3.2
-
+    , werewolf-server
+    , wai-websockets >=3.0 && <4
+    , websockets >=0.12 && <0.14
 test-suite skeleton-test
   type: exitcode-stdio-1.0
   main-is: SkeletonSpec.hs
@@ -73,3 +78,40 @@ test-suite t03-lobby-test
       base >=4.17 && <5
     , werewolf-server
     , hspec >=2.10
+
+test-suite t04-phase-test
+  type: exitcode-stdio-1.0
+  main-is: T04PhaseSpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , werewolf-server
+    , hspec >=2.10
+    , QuickCheck >=2.14
+
+test-suite protocol-lobby-test
+  type: exitcode-stdio-1.0
+  main-is: ProtocolLobbySpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , werewolf-server
+    , hspec >=2.10
+    , aeson >=2 && <3
+    , bytestring >=0.11
+
+test-suite server-gameloop-test
+  type: exitcode-stdio-1.0
+  main-is: ServerGameLoopSpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , werewolf-server
+    , hspec >=2.10
+    , stm >=2.5 && <3
