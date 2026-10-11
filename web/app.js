@@ -1,16 +1,10 @@
-// Chạy thử giao diện khi TV2 chưa có WebSocket.
-const DEMO = true;
-
-// Điền địa chỉ WebSocket do TV2 cung cấp khi tích hợp Server thật.
-const WS_URL = "";
+const WS_URL = "ws://localhost:8080/ws";
 
 let socket = null;
 let requestNumber = 0;
-let demoNextId = 1;
-let demoHostPlayerId = null;
 
 const state = {
-  connected: DEMO,
+  connected: false,
   roomId: null,
   selfPlayerId: null,
   hostPlayerId: null,
@@ -18,9 +12,6 @@ const state = {
   pending: null,
   error: ""
 };
-
-// Dữ liệu Server giả lập, tách khỏi state của giao diện.
-const demoPlayers = [];
 
 const el = {
   status: document.querySelector("#connection-status"),
@@ -31,6 +22,7 @@ const el = {
   roomId: document.querySelector("#room-id"),
   playerName: document.querySelector("#player-name"),
   joinButton: document.querySelector("#join-button"),
+  createButton: document.querySelector("#create-button"),
   roomTitle: document.querySelector("#room-title"),
   playerList: document.querySelector("#player-list"),
   playerCount: document.querySelector("#player-count"),
@@ -44,27 +36,21 @@ function normalizePlayerName(name) {
   return name.trim().replace(/\s+/gu, " ");
 }
 
-// Vẽ giao diện từ state hiện tại.
 function render() {
-  el.status.textContent = DEMO
-    ? "Đang dùng Server giả lập"
-    : state.connected
-      ? "Đã kết nối Server"
-      : "Mất kết nối Server";
+  el.status.textContent = state.connected
+    ? "Đã kết nối Server"
+    : "Mất kết nối Server";
 
-  el.status.dataset.mode = DEMO
-    ? "demo"
-    : state.connected
-      ? "online"
-      : "offline";
-
+  el.status.dataset.mode = state.connected ? "online" : "offline";
   el.message.textContent = state.error;
+
   el.joinSection.hidden = state.selfPlayerId !== null;
   el.lobbySection.hidden = state.selfPlayerId === null;
 
   const busy = state.pending !== null;
 
   el.joinButton.disabled = !state.connected || busy;
+  el.createButton.disabled = !state.connected || busy;
   el.readyButton.disabled = !state.connected || busy;
   el.leaveButton.disabled = !state.connected || busy;
 
@@ -72,6 +58,11 @@ function render() {
     state.pending?.type === "JoinGame"
       ? "Đang tham gia..."
       : "Tham gia phòng";
+
+  el.createButton.textContent =
+    state.pending?.type === "CreateRoom"
+      ? "Đang tạo phòng..."
+      : "Tạo phòng";
 
   el.roomTitle.textContent = `Phòng ${state.roomId ?? ""}`;
   el.playerCount.textContent = `${state.players.length}/9 người`;
@@ -116,7 +107,8 @@ function render() {
     }
 
     const ready = document.createElement("span");
-    ready.className = `ready-badge${player.ready ? " is-ready" : ""}`;
+    ready.className =
+      `ready-badge${player.ready ? " is-ready" : ""}`;
     ready.textContent = player.ready
       ? "Sẵn sàng"
       : "Chưa sẵn sàng";
@@ -141,9 +133,14 @@ function render() {
     : "";
 }
 
-// Tạo command. Giao diện chưa tự thay đổi danh sách người chơi ở bước này.
 function sendCommand(type, fields = {}) {
-  if (!state.connected || state.pending !== null) return;
+  if (state.pending !== null) return;
+
+  if (!socket || socket.readyState !== WebSocket.OPEN) {
+    state.error = "Chưa kết nối được Server.";
+    render();
+    return;
+  }
 
   const requestId = `req-${Date.now()}-${++requestNumber}`;
 
@@ -156,17 +153,10 @@ function sendCommand(type, fields = {}) {
 
   state.pending = {
     type,
-    requestId,
-    ready: fields.ready
+    requestId
   };
-
   state.error = "";
   render();
-
-  if (DEMO) {
-    setTimeout(() => mockServer(command), 300);
-    return;
-  }
 
   try {
     socket.send(JSON.stringify(command));
@@ -177,11 +167,9 @@ function sendCommand(type, fields = {}) {
   }
 }
 
-// Chỉ cập nhật giao diện sau khi có phản hồi từ Server hoặc Server giả lập.
 function handleServerMessage(message) {
   switch (message.type) {
     case "LobbySnapshot":
-      // Mẫu phản hồi giả lập; khi tích hợp cần đối chiếu JSON thật với TV2.
       state.roomId = message.roomId;
       state.selfPlayerId = message.selfPlayerId;
       state.hostPlayerId = message.hostPlayerId;
@@ -240,7 +228,10 @@ function handleServerMessage(message) {
       break;
 
     case "CommandRejected":
-      if (message.requestId === state.pending?.requestId) {
+      if (
+        message.requestId === null ||
+        message.requestId === state.pending?.requestId
+      ) {
         state.pending = null;
         state.error =
           message.message || message.code || "Yêu cầu bị từ chối.";
@@ -251,119 +242,35 @@ function handleServerMessage(message) {
   render();
 }
 
-// Server giả lập chỉ dùng để thử giao diện trước khi có WebSocket thật.
-function mockServer(command) {
-  if (command.type === "JoinGame") {
-    const name = normalizePlayerName(command.playerName);
-
-    if (
-      demoPlayers.some(
-        player =>
-          normalizePlayerName(player.displayName).toLowerCase() ===
-          name.toLowerCase()
-      )
-    ) {
-      handleServerMessage({
-        type: "CommandRejected",
-        requestId: command.requestId,
-        message: "Tên này đã có trong phòng."
-      });
-      return;
-    }
-
-    if (demoPlayers.length >= 9) {
-      handleServerMessage({
-        type: "CommandRejected",
-        requestId: command.requestId,
-        message: "Phòng đã đủ 9 người."
-      });
-      return;
-    }
-
-    const player = {
-      playerId: `player-${demoNextId++}`,
-      displayName: name,
-      ready: false
-    };
-
-    demoPlayers.push(player);
-
-    if (demoHostPlayerId === null) {
-      demoHostPlayerId = player.playerId;
-    }
-
-    handleServerMessage({
-      type: "LobbySnapshot",
-      roomId: command.roomId,
-      selfPlayerId: player.playerId,
-      hostPlayerId: demoHostPlayerId,
-      players: [...demoPlayers]
-    });
-  }
-
-  if (command.type === "LeaveGame") {
-    const leavingId = state.selfPlayerId;
-    const wasHost = demoHostPlayerId === leavingId;
-
-    const index = demoPlayers.findIndex(
-      player => player.playerId === leavingId
-    );
-
-    if (index !== -1) {
-      demoPlayers.splice(index, 1);
-    }
-
-    if (wasHost) {
-      demoHostPlayerId = demoPlayers[0]?.playerId ?? null;
-    }
-
-    handleServerMessage({
-      type: "PlayerLeft",
-      playerId: leavingId
-    });
-
-    if (wasHost && demoHostPlayerId !== null) {
-      handleServerMessage({
-        type: "HostChanged",
-        hostPlayerId: demoHostPlayerId
-      });
-    }
-  }
-
-  if (command.type === "SetReady") {
-    const player = demoPlayers.find(
-      item => item.playerId === state.selfPlayerId
-    );
-
-    if (!player) return;
-
-    player.ready = command.ready;
-
-    handleServerMessage({
-      type: "ReadyChanged",
-      playerId: player.playerId,
-      ready: player.ready
-    });
-  }
-}
-
-// Người chơi nhập mã phòng và tên, sau đó gửi ý định Join.
-el.joinForm.addEventListener("submit", event => {
-  event.preventDefault();
-
+function readRoomForm() {
   const roomId = el.roomId.value.trim();
   const playerName = normalizePlayerName(el.playerName.value);
 
   if (!roomId || !playerName) {
     state.error = "Hãy nhập mã phòng và tên.";
     render();
-    return;
+    return null;
   }
 
-  sendCommand("JoinGame", { roomId, playerName });
+  return { roomId, playerName };
+}
+
+el.joinForm.addEventListener("submit", event => {
+  event.preventDefault();
+
+  const fields = readRoomForm();
+  if (fields) {
+    sendCommand("JoinGame", fields);
+  }
 });
 
-// Gửi trạng thái Ready ngược với trạng thái hiện tại.
+el.createButton.addEventListener("click", () => {
+  const fields = readRoomForm();
+  if (fields) {
+    sendCommand("CreateRoom", fields);
+  }
+});
+
 el.readyButton.addEventListener("click", () => {
   const me = state.players.find(
     player => player.playerId === state.selfPlayerId
@@ -374,38 +281,36 @@ el.readyButton.addEventListener("click", () => {
   }
 });
 
-// Yêu cầu rời phòng; chỉ xóa người khỏi UI khi có phản hồi.
 el.leaveButton.addEventListener("click", () => {
   sendCommand("LeaveGame");
 });
 
-// Kết nối WebSocket thật khi TV2 đã cung cấp địa chỉ và hợp đồng JSON.
-if (!DEMO) {
-  if (!WS_URL) {
-    state.error = "Chưa có địa chỉ WebSocket từ TV2.";
-  } else {
-    socket = new WebSocket(WS_URL);
+socket = new WebSocket(WS_URL);
 
-    socket.addEventListener("open", () => {
-      state.connected = true;
-      render();
-    });
+socket.addEventListener("open", () => {
+  state.connected = true;
+  state.error = "";
+  render();
+});
 
-    socket.addEventListener("message", event => {
-      try {
-        handleServerMessage(JSON.parse(event.data));
-      } catch {
-        state.error = "Server gửi dữ liệu không đọc được.";
-        render();
-      }
-    });
-
-    socket.addEventListener("close", () => {
-      state.connected = false;
-      state.pending = null;
-      render();
-    });
+socket.addEventListener("message", event => {
+  try {
+    handleServerMessage(JSON.parse(event.data));
+  } catch {
+    state.error = "Server gửi dữ liệu không đọc được.";
+    render();
   }
-}
+});
+
+socket.addEventListener("close", () => {
+  state.connected = false;
+  state.pending = null;
+  render();
+});
+
+socket.addEventListener("error", () => {
+  state.error = "Không kết nối được Server.";
+  render();
+});
 
 render();
