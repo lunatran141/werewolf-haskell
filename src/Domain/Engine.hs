@@ -1,7 +1,10 @@
--- | Pure Engine nhận state và command, rồi trả state cùng domain event.
+-- | Pure Engine xử lý GameState và Command, trả về state cùng DomainEvent.
 module Domain.Engine where
 
 import Domain.Types
+import Domain.Night
+  ( NightOutcome(..), nightActionPrivateEvents
+  , wolfVotingComplete, resolveNightEffects )
 import Domain.Validation
   ( validateGameInvariant
   , validateJoin
@@ -10,6 +13,7 @@ import Domain.Validation
   , expectedRoles
   , validateRolePreset
   , validateStartGame
+  , validateNightAction
   )
 
 -- Thêm người chơi vào Lobby.
@@ -285,3 +289,80 @@ applyPhaseCommand state command =
       advancePhase state
     _ ->
       Left InvalidCommand
+
+
+-- T05: Xác thực và lưu một hành động ban đêm.
+-- Lệnh không hợp lệ trả Left, không cập nhật GameState.
+submitNightAction :: GameState -> PlayerId -> NightChoice
+                  -> Either GameError (GameState, [DomainEvent])
+submitNightAction state actor choice = do
+  validateNightAction state actor choice
+
+  -- Tạo các sự kiện riêng tư, bao gồm kết quả soi của Tiên Tri.
+  events <- nightActionPrivateEvents state actor choice
+
+  -- Lưu hành động đã được xác thực, không thay đổi state ban đầu.
+  let newState = state
+        { gameNightActions = gameNightActions state ++ [(actor, choice)] }
+
+  validateGameInvariant newState
+  pure (newState, events)
+
+-- T05: Nhận Command NightAction theo ADT đã định nghĩa tại T02.
+applyNightCommand :: GameState -> Command -> Either GameError (GameState, [DomainEvent])
+applyNightCommand state command =
+  case command of
+    NightAction actor choice -> submitNightAction state actor choice
+    ResolveNight -> resolveNightTurn state
+    _ -> Left InvalidCommand
+
+
+-- T05: Tinh ket qua dem, cap nhat nguoi chet va tai nguyen cua cac vai.
+-- Chua chuyen sang Day vi Hunter va Role Reveal co the dang cho.
+resolveNightTurn :: GameState -> Either GameError (GameState, [DomainEvent])
+resolveNightTurn state = do
+  if gamePhase state /= Night then Left WrongPhase else Right ()
+  if gameNightResolved state then Left InvalidGameState else Right ()
+  if gamePendingHunter state /= Nothing then Left InvalidGameState else Right ()
+  if not (null (gamePendingReveals state)) then Left InvalidGameState else Right ()
+  validateGameInvariant state
+
+  -- Chi chot ket qua khi tat ca Soi con song da bo phieu.
+  if not (wolfVotingComplete state) then Left InvalidGameState else Right ()
+
+  let outcome = resolveNightEffects state
+      deaths = outcomeDeaths outcome
+
+      -- Chi danh dau chet, khong thay doi vai da duoc chia.
+      updatePlayer player
+        | playerId player `elem` deaths = player {playerLifeStatus = Dead}
+        | otherwise = player
+
+      deadHunter =
+        [ playerId player
+        | player <- gamePlayers state
+        , playerId player `elem` deaths
+        , playerRole player == Just Hunter
+        ]
+
+      pendingHunter = case deadHunter of
+        pid : _ -> Just pid
+        [] -> Nothing
+
+      newState = state
+        { gamePlayers = map updatePlayer (gamePlayers state)
+        , gameNightActions = []
+        , gameWitchHealReady = outcomeHealReadyAfter outcome
+        , gameWitchPoisonReady = outcomePoisonReadyAfter outcome
+        , gameLastProtected = outcomeLastProtectedAfter outcome
+        , gamePendingReveals = deaths
+        , gamePendingHunter = pendingHunter
+        , gameNightResolved = True
+        }
+
+      -- HunterShotPending la Private; chua tiet lo vai nguoi chet.
+      events = [NightResolved deaths]
+        ++ [HunterShotPending pid | pid <- deadHunter]
+
+  validateGameInvariant newState
+  pure (newState, events)

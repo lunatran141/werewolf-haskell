@@ -9,6 +9,7 @@ library
     , Domain.Rules
     , Domain.Types
     , Domain.Validation
+    , Domain.Night
     , Protocol.Json
     , Protocol.Types
     , Server.Broadcast
@@ -115,3 +116,17 @@ test-suite server-gameloop-test
     , werewolf-server
     , hspec >=2.10
     , stm >=2.5 && <3
+
+
+-- Kiểm thử T05 cho ván 8 và 9 người, gồm Unit Test và Property Test.
+test-suite t05-night-test
+  type: exitcode-stdio-1.0
+  main-is: T05NightSpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , werewolf-server
+    , hspec >=2.10
+    , QuickCheck >=2.14
