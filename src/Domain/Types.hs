@@ -107,6 +107,7 @@ data DomainEvent
   | PlayerRoleAssigned PlayerId Role
   | NightActionAccepted PlayerId
   | SeerResult PlayerId Team
+  | WitchVictimNotice PlayerId (Maybe PlayerId)
   | NightResolved [PlayerId]
   | VoteUpdated PlayerId PlayerId
   | PlayerEliminated PlayerId
@@ -126,6 +127,7 @@ eventVisibility event =
     NightActionAccepted pid  -> Private pid
     VoteUpdated voter _      -> Private voter
     HunterShotPending pid    -> Private pid
+    WitchVictimNotice pid _ -> Private pid
     _                        -> Public
 
 -- Dữ liệu trạng thái nghiệp vụ; không chứa connection/socket.
@@ -136,6 +138,7 @@ data GameState = GameState
   , gameDay              :: Int
   , gameVotes            :: [(PlayerId, PlayerId)]
   , gameNightActions     :: [(PlayerId, NightChoice)]
+  , gameWolfVotingClosed :: Bool
   , gameConfiguredRoles  :: [Role]
   , gameWolfTiePolicy    :: TiePolicy
   , gameVoteTiePolicy    :: TiePolicy
@@ -159,6 +162,7 @@ emptyLobby = GameState
   , gameDay = 0
   , gameVotes = []
   , gameNightActions = []
+  , gameWolfVotingClosed = False
   , gameConfiguredRoles = []
   , gameWolfTiePolicy = NoElimination
   , gameVoteTiePolicy = NoElimination

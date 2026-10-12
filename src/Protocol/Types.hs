@@ -1,11 +1,20 @@
+
 {-# LANGUAGE OverloadedStrings #-}
 
--- | Contract Command và Event dùng chung giữa frontend và server.
+-- | Contract Command va Event dung chung giua frontend va server.
 module Protocol.Types where
 
+import Domain.Types
+  ( NightChoice(..)
+  , Role(..)
+  , Team(..)
+  , Phase(..)
+  , GameResult(..)
+  )
 import Data.Aeson
   ( FromJSON(..)
   , ToJSON(..)
+  , Value
   , (.:)
   , (.=)
   , object
@@ -16,22 +25,24 @@ import Data.Aeson.Types (Parser)
 type RequestId = String
 type RoomId = String
 
--- Lệnh nhận từ Browser. Không có PlayerId hoặc Role.
+-- Lenh nhan tu Browser. Khong co PlayerId hoac Role.
+-- Server phai lay PlayerId tu phien ket noi da xac thuc.
 data ClientMessage
   = ClientCreateRoom RequestId RoomId String
   | ClientJoin RequestId RoomId String
   | ClientLeave RequestId RoomId
   | ClientSetReady RequestId RoomId Bool
+  | ClientNightAction RequestId RoomId NightChoice
   deriving (Eq, Show)
 
--- Một người trong danh sách Lobby gửi cho Browser.
+-- Mot nguoi trong danh sach Lobby gui cho Browser.
 data PlayerView = PlayerView
   { viewPlayerId :: String
   , viewDisplayName :: String
   , viewReady :: Bool
   } deriving (Eq, Show)
 
--- Tin Server gửi về Browser.
+-- Tin Server gui ve Browser.
 data ServerMessage
   = MsgLobbySnapshot RoomId String String [PlayerView]
   | MsgPlayerJoined RoomId PlayerView
@@ -39,7 +50,141 @@ data ServerMessage
   | MsgHostChanged RoomId String
   | MsgReadyChanged RoomId String Bool
   | MsgRejected (Maybe RequestId) String String
+
+  -- T05: Night Server Events.
+  | MsgNightActionAccepted RoomId
+  | MsgSeerResult RoomId Team
+  | MsgWitchVictimNotice RoomId (Maybe String)
+  | MsgNightResolved RoomId [String]
+  | MsgPlayerRoleRevealed RoomId String Role Team
+  | MsgPhaseChanged RoomId Phase
+  | MsgGameFinished RoomId GameResult
   deriving (Eq, Show)
+
+-- Doc NightChoice ma khong tao orphan FromJSON instance.
+-- HunterShot va HunterPass duoc xu ly boi luong T06 rieng.
+parseNightChoice :: Value -> Parser NightChoice
+parseNightChoice = withObject "NightChoice" $ \obj -> do
+  actionType <- obj .: "action" :: Parser String
+  case actionType of
+    "WolfTarget" ->
+      WolfTarget <$> obj .: "targetId"
+
+    "SeerTarget" ->
+      SeerTarget <$> obj .: "targetId"
+
+    "GuardTarget" ->
+      GuardTarget <$> obj .: "targetId"
+
+    "WitchHeal" ->
+      pure WitchHeal
+
+    "WitchPoison" ->
+      WitchPoison <$> obj .: "targetId"
+
+    "WitchPass" ->
+      pure WitchPass
+
+    "NoAction" ->
+      pure NoAction
+
+    _ ->
+      fail ("Night action khong hop le: " ++ actionType)
+
+-- Ghi NightChoice thanh JSON.
+-- Bao phu tat ca constructor de -Wall khong canh bao.
+-- Viec ghi HunterShot/HunterPass khong co nghia
+-- Browser duoc phep gui qua T05.
+nightChoiceToJSON :: NightChoice -> Value
+nightChoiceToJSON choice =
+  case choice of
+    WolfTarget target ->
+      actionWithTarget "WolfTarget" target
+
+    SeerTarget target ->
+      actionWithTarget "SeerTarget" target
+
+    GuardTarget target ->
+      actionWithTarget "GuardTarget" target
+
+    WitchHeal ->
+      actionWithoutTarget "WitchHeal"
+
+    WitchPoison target ->
+      actionWithTarget "WitchPoison" target
+
+    WitchPass ->
+      actionWithoutTarget "WitchPass"
+
+    HunterShot target ->
+      actionWithTarget "HunterShot" target
+
+    HunterPass ->
+      actionWithoutTarget "HunterPass"
+
+    NoAction ->
+      actionWithoutTarget "NoAction"
+  where
+    actionWithTarget actionName target =
+      object
+        [ "action" .= (actionName :: String)
+        , "targetId" .= target
+        ]
+
+    actionWithoutTarget actionName =
+      object
+        [ "action" .= (actionName :: String)
+        ]
+
+-- Doc Role tu JSON.
+parseRole :: String -> Parser Role
+parseRole value =
+  case value of
+    "Werewolf" -> pure Werewolf
+    "Seer" -> pure Seer
+    "Guard" -> pure Guard
+    "Witch" -> pure Witch
+    "Hunter" -> pure Hunter
+    "Villager" -> pure Villager
+    _ -> fail ("Role khong hop le: " ++ value)
+
+-- Doc Team tu JSON.
+parseTeam :: String -> Parser Team
+parseTeam value =
+  case value of
+    "Wolves" -> pure Wolves
+    "Village" -> pure Village
+    _ -> fail ("Team khong hop le: " ++ value)
+
+-- Doc Phase tu JSON.
+parsePhase :: String -> Parser Phase
+parsePhase value =
+  case value of
+    "Lobby" -> pure Lobby
+    "Night" -> pure Night
+    "Day" -> pure Day
+    "Voting" -> pure Voting
+    "GameOver" -> pure GameOver
+    _ -> fail ("Phase khong hop le: " ++ value)
+
+-- Doc GameResult tu JSON.
+parseGameResult :: String -> Parser GameResult
+parseGameResult value =
+  case value of
+    "Draw" -> pure Draw
+    "WinnerWolves" -> pure (Winner Wolves)
+    "WinnerVillage" -> pure (Winner Village)
+    _ -> fail ("GameResult khong hop le: " ++ value)
+
+-- Ghi GameResult thanh chuoi JSON.
+gameResultText :: GameResult -> String
+gameResultText result =
+  case result of
+    Draw -> "Draw"
+    Winner Wolves -> "WinnerWolves"
+    Winner Village -> "WinnerVillage"
+
+-- ClientMessage: FromJSON
 
 instance FromJSON ClientMessage where
   parseJSON = withObject "ClientMessage" $ \obj -> do
@@ -50,14 +195,25 @@ instance FromJSON ClientMessage where
     case messageType of
       "CreateRoom" ->
         ClientCreateRoom requestId roomId <$> obj .: "playerName"
+
       "JoinGame" ->
         ClientJoin requestId roomId <$> obj .: "playerName"
+
       "LeaveGame" ->
         pure (ClientLeave requestId roomId)
+
       "SetReady" ->
         ClientSetReady requestId roomId <$> obj .: "ready"
+
+      "NightAction" -> do
+        choiceValue <- obj .: "choice"
+        choice <- parseNightChoice choiceValue
+        pure (ClientNightAction requestId roomId choice)
+
       _ ->
         fail ("Loai command khong ho tro: " ++ messageType)
+
+-- ClientMessage: ToJSON
 
 instance ToJSON ClientMessage where
   toJSON message =
@@ -93,6 +249,16 @@ instance ToJSON ClientMessage where
           , "ready" .= ready
           ]
 
+      ClientNightAction requestId roomId choice ->
+        object
+          [ "type" .= ("NightAction" :: String)
+          , "requestId" .= requestId
+          , "roomId" .= roomId
+          , "choice" .= nightChoiceToJSON choice
+          ]
+
+-- PlayerView: FromJSON va ToJSON
+
 instance FromJSON PlayerView where
   parseJSON = withObject "PlayerView" $ \obj ->
     PlayerView
@@ -107,6 +273,9 @@ instance ToJSON PlayerView where
       , "displayName" .= viewDisplayName player
       , "ready" .= viewReady player
       ]
+
+
+-- ServerMessage: FromJSON
 
 instance FromJSON ServerMessage where
   parseJSON = withObject "ServerMessage" $ \obj -> do
@@ -147,8 +316,52 @@ instance FromJSON ServerMessage where
           <*> obj .: "code"
           <*> obj .: "message"
 
+      -- T05: Night Events.
+
+      "NightActionAccepted" ->
+        MsgNightActionAccepted <$> obj .: "roomId"
+
+      "SeerResult" -> do
+        roomId <- obj .: "roomId"
+        teamText <- obj .: "team"
+        team <- parseTeam teamText
+        pure (MsgSeerResult roomId team)
+
+      "WitchVictimNotice" ->
+        MsgWitchVictimNotice
+          <$> obj .: "roomId"
+          <*> obj .: "victimId"
+
+      "NightResolved" ->
+        MsgNightResolved
+          <$> obj .: "roomId"
+          <*> obj .: "deaths"
+
+      "PlayerRoleRevealed" -> do
+        roomId <- obj .: "roomId"
+        playerId <- obj .: "playerId"
+        roleText <- obj .: "role"
+        teamText <- obj .: "team"
+        role <- parseRole roleText
+        team <- parseTeam teamText
+        pure (MsgPlayerRoleRevealed roomId playerId role team)
+
+      "PhaseChanged" -> do
+        roomId <- obj .: "roomId"
+        phaseText <- obj .: "phase"
+        phase <- parsePhase phaseText
+        pure (MsgPhaseChanged roomId phase)
+
+      "GameFinished" -> do
+        roomId <- obj .: "roomId"
+        resultText <- obj .: "result"
+        result <- parseGameResult resultText
+        pure (MsgGameFinished roomId result)
+
       _ ->
         fail ("Loai server message khong ho tro: " ++ messageType)
+
+-- ServerMessage: ToJSON
 
 instance ToJSON ServerMessage where
   toJSON message =
@@ -197,4 +410,56 @@ instance ToJSON ServerMessage where
           , "requestId" .= requestId
           , "code" .= code
           , "message" .= messageText
+          ]
+
+      -- T05: Night Events.
+
+      MsgNightActionAccepted roomId ->
+        object
+          [ "type" .= ("NightActionAccepted" :: String)
+          , "roomId" .= roomId
+          ]
+
+      MsgSeerResult roomId team ->
+        object
+          [ "type" .= ("SeerResult" :: String)
+          , "roomId" .= roomId
+          , "team" .= show team
+          ]
+
+      MsgWitchVictimNotice roomId victim ->
+        object
+          [ "type" .= ("WitchVictimNotice" :: String)
+          , "roomId" .= roomId
+          , "victimId" .= victim
+          ]
+
+      MsgNightResolved roomId deaths ->
+        object
+          [ "type" .= ("NightResolved" :: String)
+          , "roomId" .= roomId
+          , "deaths" .= deaths
+          ]
+
+      MsgPlayerRoleRevealed roomId playerId role team ->
+        object
+          [ "type" .= ("PlayerRoleRevealed" :: String)
+          , "roomId" .= roomId
+          , "playerId" .= playerId
+          , "role" .= show role
+          , "team" .= show team
+          ]
+
+      MsgPhaseChanged roomId phase ->
+        object
+          [ "type" .= ("PhaseChanged" :: String)
+          , "roomId" .= roomId
+          , "phase" .= show phase
+          ]
+
+      MsgGameFinished roomId result ->
+        object
+          [ "type" .= ("GameFinished" :: String)
+          , "roomId" .= roomId
+          , "result" .= gameResultText result
           ]

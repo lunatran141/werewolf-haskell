@@ -1,4 +1,5 @@
--- | Một đường xử lý Command chung từ queue tới Pure Engine.
+
+-- | Mot duong xu ly Command chung tu queue toi Pure Engine.
 module Server.GameLoop
   ( processNextLobbyCommand
   , runLobbyLoop
@@ -7,26 +8,37 @@ module Server.GameLoop
   ) where
 
 import Control.Concurrent.MVar (modifyMVar)
+
 import Control.Concurrent.STM
   ( atomically
   , newEmptyTMVarIO
   , putTMVar
   , readTBQueue
   , readTVar
+  , readTVarIO
   , takeTMVar
   , writeTBQueue
   , writeTChan
   , writeTVar
   )
+
 import Data.Char (isSpace)
-import Domain.Engine (applyLobbyCommand)
+
+import Domain.Engine
+  ( applyLobbyCommand
+  , applyNightCommand
+  )
+
 import Domain.Types
   ( Command(..)
+  , DomainEvent
   , GameError(..)
   , GameState(..)
   , PlayerId
   )
+
 import Protocol.Types (RequestId, RoomId)
+
 import Server.Room
   ( QueuedCommand(..)
   , RoomRegistry(..)
@@ -35,17 +47,69 @@ import Server.Room
   , newRoomRuntime
   )
 
--- Kiểm tra ID trong lệnh khớp với ID Server gắn cho phiên kết nối.
--- Lệnh đổi pha và chia vai chưa đi qua luồng Lobby này.
+
+-- Xac thuc nguoi gui command
+
+
+-- Kiem tra ID trong lenh khop voi ID Server gan cho phien ket noi.
+-- Lenh noi bo nhu ResolveNight khong duoc gui truc tiep tu Browser.
 actorMatches :: QueuedCommand -> Bool
 actorMatches request =
   case queuedCommand request of
-    Join pid _     -> pid == queuedActorId request
-    Leave pid      -> pid == queuedActorId request
-    SetReady pid _ -> pid == queuedActorId request
-    _              -> False
+    Join pid _ ->
+      pid == queuedActorId request
 
--- Xử lý đúng một lệnh; hàm sẽ chờ nếu hàng đợi đang rỗng.
+    Leave pid ->
+      pid == queuedActorId request
+
+    SetReady pid _ ->
+      pid == queuedActorId request
+
+    -- T05: Chi cho phep gui NightAction voi dung PlayerId cua phien.
+    NightAction pid _ ->
+      pid == queuedActorId request
+
+    -- Khong cho phep client tu goi lenh noi bo.
+    _ ->
+      False
+
+
+
+-- T05: Dispatcher Lobby va NightAction
+
+-- Chon Pure Engine theo loai command.
+-- Khong cho client tu goi ResolveNight, StartGame,
+-- AdvancePhase hoac cac lenh noi bo khac qua dispatcher nay.
+dispatchPlayerCommand
+  :: GameState
+  -> Command
+  -> Either GameError (GameState, [DomainEvent])
+dispatchPlayerCommand state command =
+  case command of
+    -- T05: Xu ly hanh dong ban dem.
+    NightAction _ _ ->
+      applyNightCommand state command
+
+    -- Giu nguyen xu ly Lobby.
+    Join _ _ ->
+      applyLobbyCommand state command
+
+    Leave _ ->
+      applyLobbyCommand state command
+
+    SetReady _ _ ->
+      applyLobbyCommand state command
+
+    -- Lenh khong thuoc dispatcher nay bi tu choi.
+    _ ->
+      Left NotAuthorized
+
+
+
+-- Xu ly Command Queue
+
+-- Xu ly dung mot lenh; ham se cho neu hang doi dang rong.
+-- Cap nhat state, version va event trong cung mot giao dich STM.
 processNextLobbyCommand :: RoomRuntime -> IO ()
 processNextLobbyCommand room = atomically $ do
   request <- readTBQueue (roomCommands room)
@@ -53,36 +117,57 @@ processNextLobbyCommand room = atomically $ do
 
   let result =
         if actorMatches request
-          then applyLobbyCommand currentState (queuedCommand request)
+          then dispatchPlayerCommand currentState (queuedCommand request)
           else Left NotAuthorized
 
   case result of
-    Left err ->
-      -- Lệnh lỗi: không sửa state, không phát event.
+    Left err -> do
+      -- Lenh loi: khong sua state, khong tang version,
+      -- khong phat DomainEvent.
       putTMVar (queuedReply request) (Left err)
 
     Right (nextState, events) -> do
       currentVersion <- readTVar (roomVersion room)
       let nextVersion = currentVersion + 1
 
+      -- Luu GameState moi.
       writeTVar (roomState room) nextState
+
+      -- Tang version sau khi xu ly command thanh cong.
       writeTVar (roomVersion room) nextVersion
+
+      -- Phat DomainEvent cho he thong Broadcast noi bo.
       writeTChan (roomUpdates room)
         RoomUpdate
           { updateVersion = nextVersion
           , updateState = nextState
           , updateEvents = events
           }
+
+      -- Gui ket qua ve ket noi da gui command.
       putTMVar (queuedReply request) (Right nextState)
 
--- Worker dừng khi người cuối cùng rời phòng.
+
+
+-- Vong lap xu ly Command Queue
+
+
+-- Worker dung khi nguoi cuoi cung roi phong.
+-- Giu nguyen ten ham de khong anh huong code Server hien tai.
 runLobbyLoop :: RoomRuntime -> IO ()
 runLobbyLoop room = do
   processNextLobbyCommand room
-  state <- atomically (readTVar (roomState room))
+
+  state <- readTVarIO (roomState room)
+
   if null (gamePlayers state)
     then pure ()
     else runLobbyLoop room
+
+
+
+-- Tao Room va Host
+
 
 data CreateRoomError
   = InvalidRoomId
@@ -90,7 +175,8 @@ data CreateRoomError
   | HostJoinRejected GameError
   deriving (Eq, Show)
 
--- Chỉ đưa phòng vào Registry sau khi Host Join thành công.
+
+-- Chi dua phong vao Registry sau khi Host Join thanh cong.
 createRoomWithHost
   :: RoomRegistry
   -> RoomId
@@ -102,6 +188,7 @@ createRoomWithHost
 createRoomWithHost registry rid requestId actor name startWorker
   | null rid || length rid > 32 || any isSpace rid =
       pure (Left InvalidRoomId)
+
   | otherwise =
       modifyMVar (registryRooms registry) $ \rooms ->
         case lookup rid rooms of
@@ -121,8 +208,10 @@ createRoomWithHost registry rid requestId actor name startWorker
                   , queuedReply = reply
                   }
 
-            -- Phòng chưa được công bố; xử lý Join đầu tiên ngay tại đây.
+            -- Phong chua duoc cong bo.
+            -- Xu ly Join dau tien ngay tai day.
             processNextLobbyCommand room
+
             result <- atomically (takeTMVar reply)
 
             case result of
@@ -131,4 +220,8 @@ createRoomWithHost registry rid requestId actor name startWorker
 
               Right state -> do
                 startWorker room
-                pure ((rid, room) : rooms, Right (room, state))
+
+                pure
+                  ( (rid, room) : rooms
+                  , Right (room, state)
+                  )
