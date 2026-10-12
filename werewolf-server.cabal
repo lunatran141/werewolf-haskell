@@ -10,6 +10,7 @@ library
     , Domain.Types
     , Domain.Validation
     , Domain.Night
+    , Domain.RoleShuffle
     , Protocol.Json
     , Protocol.Types
     , Server.Broadcast
@@ -26,6 +27,7 @@ library
       , bytestring >=0.11
       , stm >=2.5 && <3
       , websockets >=0.12 && <0.14
+      , random >=1.2 && <2
 executable werewolf-server
   main-is: Main.hs
   hs-source-dirs: app
@@ -130,3 +132,35 @@ test-suite t05-night-test
     , werewolf-server
     , hspec >=2.10
     , QuickCheck >=2.14
+
+-- T05: Kiem thu RNG seed va generator injection.
+test-suite t05-rng-test
+  type: exitcode-stdio-1.0
+  main-is: T05RngSpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , werewolf-server
+    , random >=1.2 && <2
+    , hspec >=2.10
+    , QuickCheck >=2.14
+
+
+-- T05: Kiem thu NightAction qua ket noi WebSocket.
+-- Kiem tra xac thuc phien, loi command va private event.
+test-suite t05-websocket-test
+  type: exitcode-stdio-1.0
+  main-is: T05WebSocketSpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , werewolf-server
+    , hspec >=2.10
+    , aeson >=2 && <3
+    , bytestring >=0.11
+    , stm >=2.5 && <3
+    , websockets >=0.12 && <0.14

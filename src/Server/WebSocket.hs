@@ -1,3 +1,4 @@
+
 module Server.WebSocket (webSocketApp) where
 
 import Control.Concurrent (ThreadId, forkIO, killThread)
@@ -11,6 +12,7 @@ import Control.Concurrent.STM
   , readTChan
   , readTQueue
   , readTVar
+  , readTVarIO
   , takeTMVar
   , writeTBQueue
   , writeTQueue
@@ -21,6 +23,7 @@ import Control.Monad (forM_, forever)
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Domain.Types
   ( Command(..)
+  , DomainEvent(..)
   , GameError(..)
   , GameState(..)
   , Player(..)
@@ -35,12 +38,18 @@ import Protocol.Types
   , RoomId
   , ServerMessage(..)
   )
-import Server.Broadcast (lobbyMessages, lobbyReply, lobbySnapshot)
+import Server.Broadcast
+  ( lobbyMessages
+  , lobbyReply
+  , lobbySnapshot
+  , nightMessagesFor
+  )
 import Server.GameLoop (CreateRoomError(..), createRoomWithHost)
 import Server.Room
   ( QueuedCommand(..)
   , RoomRegistry(..)
   , RoomRuntime(..)
+  , RoomUpdate(..)
   )
 
 sendToClient :: TQueue ServerMessage -> ServerMessage -> IO ()
@@ -57,6 +66,7 @@ reject outbound requestId code message =
   sendToClient outbound
     (MsgRejected (Just requestId) code message)
 
+-- PlayerId duoc gan boi Server, khong lay tu JSON Browser.
 submitCommand
   :: RoomRuntime
   -> RequestId
@@ -77,8 +87,8 @@ submitCommand room requestId actor command = do
 
   atomically (takeTMVar reply)
 
--- Xử lý Leave và xóa phòng rỗng dưới cùng khóa Registry.
--- Nhờ vậy Join mới không thể chen vào giữa hai thao tác.
+-- Xu ly Leave va xoa phong rong duoi cung khoa Registry.
+-- Nho vay Join moi khong the chen vao giua hai thao tac.
 leaveAndPrune
   :: RoomRegistry
   -> RoomRuntime
@@ -87,9 +97,9 @@ leaveAndPrune
   -> IO (Either GameError GameState)
 leaveAndPrune registry room requestId actor =
   modifyMVar (registryRooms registry) $ \rooms -> do
-    currentState <- atomically (readTVar (roomState room))
+    currentState <- readTVarIO (roomState room)
 
-    -- Nếu người chơi đã rời, không gửi Leave vào worker có thể đã dừng.
+    -- Neu nguoi choi da roi, khong gui Leave vao worker da dung.
     if not (any ((== actor) . playerId) (gamePlayers currentState))
       then pure (rooms, Left PlayerNotFound)
       else do
@@ -107,12 +117,30 @@ leaveAndPrune registry room requestId actor =
 forOtherPlayer :: PlayerId -> ServerMessage -> Bool
 forOtherPlayer actor message =
   case message of
-    MsgPlayerJoined _ player -> viewPlayerId player /= actor
-    MsgPlayerLeft _ pid      -> pid /= actor
-    MsgReadyChanged _ pid _  -> pid /= actor
-    _                       -> True
+    MsgPlayerJoined _ player ->
+      viewPlayerId player /= actor
 
--- Đọc snapshot và đăng ký nhận cập nhật trong cùng một transaction.
+    MsgPlayerLeft _ pid ->
+      pid /= actor
+
+    MsgReadyChanged _ pid _ ->
+      pid /= actor
+
+    _ ->
+      True
+
+-- NightResolved co the xuat hien khi Hunter chua xu ly xong.
+-- Khong cong khai danh sach nguoi chet tu event nay.
+-- PlayerRoleRevealed duoc phat khi Engine hoan tat death effects.
+safeNightEvent :: DomainEvent -> Bool
+safeNightEvent event =
+  case event of
+    NightResolved _ ->
+      False
+    _ ->
+      True
+
+-- Doc snapshot va dang ky nhan cap nhat trong cung transaction.
 beginSession
   :: RoomRuntime
   -> PlayerId
@@ -123,16 +151,28 @@ beginSession room actor sessionRef outbound = do
   updates <- atomically $ do
     channel <- dupTChan (roomUpdates room)
     state <- readTVar (roomState room)
+
     writeTQueue outbound
       (lobbySnapshot (roomId room) actor state)
+
     pure channel
 
   broadcastThread <- forkIO $ forever $ do
     update <- atomically (readTChan updates)
+
+    -- Gui cac event Lobby nhu truoc day.
     forM_
       (filter (forOtherPlayer actor)
         (lobbyMessages (roomId room) update))
       (sendToClient outbound)
+
+    -- T05: Loc Night Event theo PlayerId cua phien ket noi.
+    -- Khong broadcast thong tin rieng tu cho ca phong.
+    let safeEvents = filter safeNightEvent (updateEvents update)
+        nightMessages =
+          nightMessagesFor (roomId room) actor safeEvents
+
+    forM_ nightMessages (sendToClient outbound)
 
   writeIORef sessionRef (Just (room, broadcastThread))
 
@@ -146,16 +186,32 @@ createErrorReply
 createErrorReply requestId rid actor name createError =
   case createError of
     InvalidRoomId ->
-      MsgRejected (Just requestId) "INVALID_ROOM_ID"
-        "Mã phòng không hợp lệ."
+      MsgRejected
+        (Just requestId)
+        "INVALID_ROOM_ID"
+        "Ma phong khong hop le."
 
     RoomAlreadyExists ->
-      MsgRejected (Just requestId) "ROOM_ALREADY_EXISTS"
-        "Mã phòng này đã được sử dụng."
+      MsgRejected
+        (Just requestId)
+        "ROOM_ALREADY_EXISTS"
+        "Ma phong nay da duoc su dung."
 
     HostJoinRejected domainError ->
       lobbyReply rid requestId actor (Join actor name)
         (Left domainError)
+
+-- Chi gui loi cho client da gui command.
+-- NightAction thanh cong duoc xac nhan bang NightActionAccepted.
+nightActionErrorReply
+  :: RequestId
+  -> GameError
+  -> ServerMessage
+nightActionErrorReply requestId err =
+  MsgRejected
+    (Just requestId)
+    (show err)
+    ("NightAction bi tu choi: " ++ show err)
 
 handleClientMessage
   :: RoomRegistry
@@ -173,7 +229,7 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
       case current of
         Just _ ->
           reject outbound requestId "ALREADY_JOINED"
-            "Bạn đã ở trong một phòng."
+            "Ban da o trong mot phong."
 
         Nothing -> do
           result <-
@@ -193,13 +249,12 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
       case current of
         Just _ ->
           reject outbound requestId "ALREADY_JOINED"
-            "Bạn đã ở trong một phòng."
+            "Ban da o trong mot phong."
 
         Nothing -> do
           let command = Join actor name
 
-          -- Giữ khóa Registry trong lúc Join được xử lý.
-          -- Leave của người cuối sẽ phải chờ Join này hoàn tất.
+          -- Giu khoa Registry trong khi Join duoc xu ly.
           found <- withMVar (registryRooms registry) $ \rooms ->
             case lookup rid rooms of
               Nothing ->
@@ -212,7 +267,7 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
           case found of
             Nothing ->
               reject outbound requestId "ROOM_NOT_FOUND"
-                "Không tìm thấy phòng."
+                "Khong tim thay phong."
 
             Just (room, result) ->
               case result of
@@ -229,12 +284,12 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
       case current of
         Nothing ->
           reject outbound requestId "NOT_JOINED"
-            "Bạn chưa tham gia phòng."
+            "Ban chua tham gia phong."
 
         Just (room, broadcastThread)
           | rid /= roomId room ->
               reject outbound requestId "WRONG_ROOM"
-                "Bạn không ở trong phòng này."
+                "Ban khong o trong phong nay."
 
           | otherwise -> do
               let command = Leave actor
@@ -257,12 +312,12 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
       case current of
         Nothing ->
           reject outbound requestId "NOT_JOINED"
-            "Bạn chưa tham gia phòng."
+            "Ban chua tham gia phong."
 
         Just (room, _)
           | rid /= roomId room ->
               reject outbound requestId "WRONG_ROOM"
-                "Bạn không ở trong phòng này."
+                "Ban khong o trong phong nay."
 
           | otherwise -> do
               let command = SetReady actor ready
@@ -271,6 +326,33 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
               sendToClient outbound
                 (lobbyReply rid requestId actor command result)
 
+    -- T05: Dua NightAction vao queue bang PlayerId cua Server.
+    ClientNightAction requestId rid choice -> do
+      current <- readIORef sessionRef
+
+      case current of
+        Nothing ->
+          reject outbound requestId "NOT_JOINED"
+            "Ban chua tham gia phong."
+
+        Just (room, _)
+          | rid /= roomId room ->
+              reject outbound requestId "WRONG_ROOM"
+                "Ban khong o trong phong nay."
+
+          | otherwise -> do
+              let command = NightAction actor choice
+              result <- submitCommand room requestId actor command
+
+              case result of
+                Left err ->
+                  sendToClient outbound
+                    (nightActionErrorReply requestId err)
+
+                Right _ ->
+                  -- Ack duoc gui qua DomainEvent, tranh gui trung.
+                  pure ()
+
 webSocketApp
   :: RoomRegistry
   -> (RoomRuntime -> IO ())
@@ -278,7 +360,7 @@ webSocketApp
 webSocketApp registry startWorker pending = do
   connection <- WS.acceptRequest pending
 
-  -- ID do Server cấp; Browser không gửi PlayerId.
+  -- ID do Server cap; Browser khong gui PlayerId.
   actor <- atomically $ do
     nextId <- readTVar (registryNextPlayerId registry)
     writeTVar (registryNextPlayerId registry) (nextId + 1)
@@ -300,7 +382,7 @@ webSocketApp registry startWorker pending = do
               Left _ ->
                 sendToClient outbound
                   (MsgRejected Nothing "INVALID_JSON"
-                    "JSON không hợp lệ.")
+                    "JSON khong hop le.")
 
               Right clientMessage ->
                 handleClientMessage
@@ -314,14 +396,14 @@ webSocketApp registry startWorker pending = do
           WS.Binary _ ->
             sendToClient outbound
               (MsgRejected Nothing "TEXT_REQUIRED"
-                "Hãy gửi text frame JSON.")
+                "Hay gui text frame JSON.")
 
       cleanup = do
         current <- readIORef sessionRef
 
         case current of
           Just (room, broadcastThread) -> do
-            -- Đóng tab hoặc mất kết nối cũng xử lý như Leave.
+            -- Dong tab hoac mat ket noi xu ly nhu Leave.
             _ <- leaveAndPrune registry room "disconnect" actor
             killThread broadcastThread
 

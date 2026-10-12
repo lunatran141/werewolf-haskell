@@ -3,11 +3,12 @@ import Test.Hspec
 import Test.Hspec.QuickCheck (prop)
 import Test.QuickCheck (Positive(..))
 import Domain.Engine
-  ( startGame, submitNightAction, applyNightCommand, resolveNightTurn )
+  ( startGame, submitNightAction, applyNightCommand
+  , resolveNightTurn, closeWolfVoting
+  , nightGameResult, completeNightTurn )
 import Domain.Night
 import Domain.Types
 import Domain.Validation (expectedRoles)
-
 -- Tao van dung preset 8 hoac 9 nguoi bang StartGame cua T04.
 mkGame :: Int -> GameState
 mkGame count =
@@ -328,8 +329,6 @@ main = hspec $ do
     it "Cung State va Command cho cung ket qua" $ do
       let command = NightAction "3" (SeerTarget "1")
       applyNightCommand game8 command `shouldBe` applyNightCommand game8 command
-
-  
   describe "T05 - ResolveNight 8 va 9 nguoi" $ do
     it "Van 8: Soi can Dan, Dan chet va action duoc xoa" $ do
       let state = withActions game8 [("1", WolfTarget "7"), ("2", WolfTarget "7")]
@@ -342,7 +341,6 @@ main = hspec $ do
           gamePhase next `shouldBe` Night
           gamePendingReveals next `shouldBe` ["7"]
           events `shouldBe` [NightResolved ["7"]]
-
     it "Van 8: Bao Ve chan Soi, khong co nguoi chet" $ do
       let state = withActions game8
             [("1", WolfTarget "7"), ("2", WolfTarget "7"), ("4", GuardTarget "7")]
@@ -352,11 +350,9 @@ main = hspec $ do
           gamePendingReveals next `shouldBe` []
           gameLastProtected next `shouldBe` Just "7"
           events `shouldBe` [NightResolved []]
-
     it "Van 8: Chua du phieu Soi thi khong duoc resolve" $ do
       let state = withActions game8 [("1", WolfTarget "7")]
       resolveNightTurn state `shouldBe` Left InvalidGameState
-
     it "Van 9: Witch Poison giet Hunter, cho Hunter ban" $ do
       let state = withActions game9
             [ ("1", WolfTarget "8"), ("2", WolfTarget "8")
@@ -371,7 +367,6 @@ main = hspec $ do
           events `shouldBe`
             [NightResolved ["8", "7"], HunterShotPending "7"]
           map eventVisibility events `shouldBe` [Public, Private "7"]
-
     it "Van 9: Witch Heal cuu nan nhan va mat binh cuu" $ do
       let state = withActions game9
             [ ("1", WolfTarget "8"), ("2", WolfTarget "8")
@@ -381,15 +376,108 @@ main = hspec $ do
         Right (next, _) -> do
           gamePendingReveals next `shouldBe` []
           gameWitchHealReady next `shouldBe` False
-
     it "ResolveNight khong duoc chay hai lan" $ do
       let state = withActions game8 [("1", WolfTarget "7"), ("2", WolfTarget "7")]
       case resolveNightTurn state of
         Left err -> expectationFailure (show err)
         Right (next, _) ->
           resolveNightTurn next `shouldBe` Left InvalidGameState
-
     it "Command ResolveNight duoc dispatcher xu ly" $ do
       let state = withActions game8 [("1", WolfTarget "7"), ("2", WolfTarget "7")]
       applyNightCommand state ResolveNight `shouldBe` resolveNightTurn state
+  describe "T05 - Wolf Voting Lock va Witch Notice" $ do
+    it "Van 8: khoa phieu Soi khi du 2 phieu" $ do
+      let state = withActions game8 [("1", WolfTarget "7"), ("2", WolfTarget "7")]
+      case closeWolfVoting state False of
+        Left err -> expectationFailure (show err)
+        Right (next, events) -> do
+          gameWolfVotingClosed next `shouldBe` True
+          events `shouldBe` [WitchVictimNotice "5" (Just "7")]
+          map eventVisibility events `shouldBe` [Private "5"]
+    it "Van 8: khong khoa som khi moi co 1 phieu" $ do
+      let state = withActions game8 [("1", WolfTarget "7")]
+      closeWolfVoting state False `shouldBe` Left InvalidGameState
+    it "Van 8: khoa do het gio khi thieu phieu" $ do
+      let state = withActions game8 [("1", WolfTarget "7")]
+      case closeWolfVoting state True of
+        Left err -> expectationFailure (show err)
+        Right (next, events) -> do
+          gameWolfVotingClosed next `shouldBe` True
+          events `shouldBe` [WitchVictimNotice "5" (Just "7")]
+    it "Van 8: Soi khong duoc bo phieu sau khi khoa" $ do
+      let state = game8 {gameWolfVotingClosed = True}
+      submitNightAction state "1" (WolfTarget "7") `shouldBe` Left InvalidNightAction
+    it "Van 8: Soi hoa 1-1 thi Witch nhan Nothing" $ do
+      let state = withActions game8 [("1", WolfTarget "7"), ("2", WolfTarget "8")]
+      case closeWolfVoting state False of
+        Left err -> expectationFailure (show err)
+        Right (_, events) -> events `shouldBe` [WitchVictimNotice "5" Nothing]
+    it "Van 9: khoa phieu 2-1 va thong bao dung nan nhan" $ do
+      let state = withActions game9
+            [("1", WolfTarget "8"), ("2", WolfTarget "8"), ("3", WolfTarget "9")]
+      case closeWolfVoting state False of
+        Left err -> expectationFailure (show err)
+        Right (_, events) -> events `shouldBe` [WitchVictimNotice "6" (Just "8")]
+    it "Van 9: khoa luot hai lan bi tu choi" $ do
+      let state = withActions game9
+            [("1", WolfTarget "8"), ("2", WolfTarget "8"), ("3", WolfTarget "9")]
+      case closeWolfVoting state False of
+        Left err -> expectationFailure (show err)
+        Right (next, _) -> closeWolfVoting next False `shouldBe` Left InvalidGameState
+    it "Van 9: Witch Heal chi duoc gui sau khi khoa" $ do
+      let state = withActions game9
+            [("1", WolfTarget "8"), ("2", WolfTarget "8"), ("3", WolfTarget "8")]
+      submitNightAction state "6" WitchHeal `shouldBe` Left InvalidNightAction
+      case closeWolfVoting state False of
+        Left err -> expectationFailure (show err)
+        Right (next, _) ->
+          case submitNightAction next "6" WitchHeal of
+            Left err -> expectationFailure (show err)
+            Right (finalState, _) ->
+              gameNightActions finalState `shouldSatisfy` elem ("6", WitchHeal)
 
+
+  describe "T05 - Complete Night va Win Condition" $ do
+    it "Van 8: reveal Dan chet va chuyen sang Day" $ do
+      let state = withActions game8
+            [("1", WolfTarget "7"), ("2", WolfTarget "7")]
+      case resolveNightTurn state >>= (completeNightTurn . fst) of
+        Left err -> expectationFailure (show err)
+        Right (next, events) -> do
+          gamePhase next `shouldBe` Day
+          gamePendingReveals next `shouldBe` []
+          events `shouldBe`
+            [PlayerRoleRevealed "7" Villager Village, PhaseChanged Day]
+
+    it "Van 8: khong co nguoi chet thi chuyen Day" $ do
+      let state = withActions game8
+            [("1", WolfTarget "7"), ("2", WolfTarget "8")]
+      case resolveNightTurn state >>= (completeNightTurn . fst) of
+        Left err -> expectationFailure (show err)
+        Right (next, events) -> do
+          gamePhase next `shouldBe` Day
+          events `shouldBe` [PhaseChanged Day]
+
+    it "Van 9: Hunter pending thi khong duoc ket thuc Night" $ do
+      let state = withActions game9
+            [ ("1", WolfTarget "8"), ("2", WolfTarget "8")
+            , ("3", WolfTarget "8"), ("6", WitchPoison "7") ]
+      case resolveNightTurn state of
+        Left err -> expectationFailure (show err)
+        Right (next, _) ->
+          completeNightTurn next `shouldBe` Left HunterNotPending
+
+    it "Het Soi thi Village thang" $ do
+      let state = withDeadPlayer (withDeadPlayer game8 "1") "2"
+      nightGameResult state `shouldBe` Just (Winner Village)
+
+    it "So Soi bang so Dan thi Wolves thang" $ do
+      let state = foldl withDeadPlayer game8 ["3", "4", "5", "6"]
+      nightGameResult state `shouldBe` Just (Winner Wolves)
+
+    it "Tat ca chet thi Draw uu tien" $ do
+      let state = foldl withDeadPlayer game8 (map playerId (gamePlayers game8))
+      nightGameResult state `shouldBe` Just Draw
+
+    it "Chua resolve Night thi khong duoc complete" $
+      completeNightTurn game8 `shouldBe` Left InvalidGameState

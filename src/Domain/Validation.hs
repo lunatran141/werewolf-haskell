@@ -147,6 +147,12 @@ validateNightAction game actor action = do
 
   case (playerRole p, action) of
     (Just Werewolf, WolfTarget target) -> do
+      -- Khong cho Soi bo phieu sau khi da khoa luot.
+      if gameWolfVotingClosed game
+        then Left InvalidNightAction
+        else Right ()
+
+      -- Muc tieu phai con song va thuoc phe Village.
       victim <- validateLivingTarget target (gamePlayers game)
       if fmap teamOfRole (playerRole victim) == Just Village
         then Right ()
@@ -161,14 +167,23 @@ validateNightAction game actor action = do
         then Left InvalidTarget
         else Right ()
 
+    
     (Just Witch, WitchHeal) -> do
+      -- Kiem tra Phu Thuy con binh Heal hay khong.
       if gameWitchHealReady game
         then Right ()
         else Left AbilityAlreadyUsed
-      -- Chỉ heal khi đã xác định được một nạn nhân Sói duy nhất.
+
+      -- Chi duoc Heal sau khi Server da khoa phieu Soi.
+      if gameWolfVotingClosed game
+        then Right ()
+        else Left InvalidNightAction
+
+      -- Phai co mot nan nhan Soi duy nhat.
       if wolfVictimKnown game
         then Right ()
         else Left InvalidNightAction
+
 
     (Just Witch, WitchPoison target) -> do
       if gameWitchPoisonReady game
@@ -228,8 +243,9 @@ wolfVictimKnown game =
                ]
 
   in not (null wolves)
-     && length votes == length wolves
+     && gameWolfVotingClosed game
      && length winners == 1
+
 
 validateVote :: GameState -> PlayerId -> PlayerId -> Either GameError ()
 validateVote game actor target = do
@@ -378,9 +394,15 @@ validateGameInvariant game = do
           || not (null (gameNightActions game)))
     then Left InvalidGameState
     else Right ()
-
+  
+  -- Kiem tra Voting da duoc resolve dung Phase.
   if gameVotingResolved game
       && (gamePhase game /= Voting
           || not (null (gameVotes game)))
+    then Left InvalidGameState
+    else Right ()
+
+  -- Chi cho phep khoa phieu Soi trong Phase Night.
+  if gameWolfVotingClosed game && gamePhase game /= Night
     then Left InvalidGameState
     else Right ()
