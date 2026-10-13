@@ -489,3 +489,245 @@ button:disabled {
     transition: none;
   }
 }
+
+
+/* T05 Night Actions */
+
+.night-card {
+  display: grid;
+  gap: 20px;
+}
+
+.night-card .room-heading {
+  margin-bottom: 0;
+}
+
+.night-card .section-label {
+  margin-bottom: 9px;
+  color: #d9bbff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.night-role-panel {
+  padding: 20px;
+  border: 1px solid rgba(205, 185, 255, 0.32);
+  border-radius: 14px;
+  background: linear-gradient(
+    135deg,
+    rgba(133, 91, 190, 0.24),
+    rgba(42, 50, 105, 0.35)
+  );
+}
+
+.night-role-panel h3 {
+  margin: 0 0 10px;
+  color: #f8e4ff;
+  font-family: Georgia, "Lora", serif;
+  font-size: 25px;
+}
+
+.night-role-panel .card-description {
+  margin: 0;
+}
+
+.night-card #night-status {
+  margin: 0;
+  padding: 12px 15px;
+  border: 1px solid rgba(205, 185, 255, 0.24);
+  border-radius: 10px;
+  color: #e4ddf5;
+  background: rgba(255, 255, 255, 0.05);
+  line-height: 1.6;
+}
+
+.night-action-panel {
+  padding: 22px;
+  border: 1px solid rgba(205, 185, 255, 0.25);
+  border-radius: 15px;
+  background: rgba(9, 13, 34, 0.42);
+}
+
+.night-action-panel h3 {
+  margin: 0 0 12px;
+  color: #fffaff;
+  font-family: Georgia, "Lora", serif;
+  font-size: 23px;
+}
+
+.night-action-panel .card-description {
+  margin-bottom: 20px;
+}
+
+.night-action-panel .form-label {
+  display: block;
+  margin-bottom: 8px;
+}
+
+.night-action-panel .form-select {
+  min-height: 50px;
+  border: 1px solid #77709f;
+  border-radius: 10px;
+  color: #f8f6ff;
+  background-color: #11182f;
+  font-size: 14px;
+}
+
+.night-action-panel .form-select:focus {
+  border-color: var(--accent);
+  color: #fff;
+  background-color: #11182f;
+  box-shadow: 0 0 0 3px rgba(198, 165, 255, 0.22);
+}
+
+.night-action-panel .form-select option {
+  color: #f8f6ff;
+  background: #171b3b;
+}
+
+.night-action-panel .form-select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.night-action-panel button {
+  transition:
+    opacity 0.2s ease,
+    background-color 0.2s ease,
+    transform 0.2s ease;
+}
+
+.night-action-panel button:not(:disabled):active {
+  transform: scale(0.98);
+}
+
+/* Private results for Seer and Witch */
+
+.night-result-panel {
+  padding: 16px 18px;
+  border: 1px solid rgba(167, 224, 205, 0.36);
+  border-radius: 12px;
+  background: rgba(33, 91, 83, 0.25);
+}
+
+.night-result-panel .section-label {
+  color: #a8efd2;
+}
+
+.night-result-panel p:last-child {
+  margin: 0;
+  color: #edfff7;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+/* Specific role accents */
+
+#wolf-action-panel {
+  border-color: rgba(239, 125, 145, 0.38);
+  background: linear-gradient(
+    145deg,
+    rgba(91, 32, 64, 0.28),
+    rgba(9, 13, 34, 0.42)
+  );
+}
+
+#wolf-action-panel .section-label {
+  color: #ffb5c5;
+}
+
+#seer-action-panel {
+  border-color: rgba(160, 165, 255, 0.38);
+  background: linear-gradient(
+    145deg,
+    rgba(59, 57, 122, 0.32),
+    rgba(9, 13, 34, 0.42)
+  );
+}
+
+#seer-action-panel .section-label {
+  color: #c4c8ff;
+}
+
+#guard-action-panel {
+  border-color: rgba(137, 222, 181, 0.38);
+  background: linear-gradient(
+    145deg,
+    rgba(32, 93, 77, 0.27),
+    rgba(9, 13, 34, 0.42)
+  );
+}
+
+#guard-action-panel .section-label {
+  color: #a8efd2;
+}
+
+#witch-action-panel {
+  border-color: rgba(231, 173, 255, 0.38);
+  background: linear-gradient(
+    145deg,
+    rgba(98, 50, 123, 0.28),
+    rgba(9, 13, 34, 0.42)
+  );
+}
+
+#witch-action-panel .section-label {
+  color: #efc5ff;
+}
+
+#night-waiting-panel {
+  text-align: center;
+}
+
+#night-waiting-panel .card-description {
+  margin-bottom: 0;
+}
+
+/* Night UI on small screens */
+
+@media (max-width: 800px) {
+  .night-card {
+    gap: 16px;
+  }
+
+  .night-action-panel {
+    padding: 19px;
+  }
+}
+
+@media (max-width: 480px) {
+  .night-card .room-heading {
+    align-items: flex-start;
+  }
+
+  .night-card .room-heading h2 {
+    font-size: 27px;
+  }
+
+  .night-role-panel,
+  .night-action-panel {
+    padding: 16px;
+  }
+
+  .night-action-panel h3 {
+    font-size: 21px;
+  }
+
+  .night-role-panel h3 {
+    font-size: 23px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .night-action-panel button {
+    transition: none;
+  }
+}
+
+/* An dung cac panel khi JavaScript dat hidden. */
+.night-card[hidden],
+.night-action-panel[hidden],
+.night-result-panel[hidden] {
+  display: none !important;
+}
