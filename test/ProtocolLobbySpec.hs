@@ -343,16 +343,22 @@ main = hspec $ do
         `shouldBe`
           [MsgPhaseChanged "ROOM-01" Day]
 
-    it "V08 - Khong chuyen event private chua co JSON contract" $ do
+
+    it "V08 - Chi gui YourRole cho dung nguoi nhan" $ do
       let events =
             [ PlayerRoleAssigned "p3" Seer
             , PhaseChanged Night
             ]
 
+      -- p3 nhan vai Seer cua chinh minh.
       nightMessagesFor "ROOM-01" "p3" events
         `shouldBe`
-          [MsgPhaseChanged "ROOM-01" Night]
+          [ MsgYourRole "ROOM-01" Seer
+          , MsgPhaseChanged "ROOM-01" Night
+          ]
 
+      -- p8 khong duoc nhan vai cua p3.
+      -- PhaseChanged van la su kien cong khai.
       nightMessagesFor "ROOM-01" "p8" events
         `shouldBe`
           [MsgPhaseChanged "ROOM-01" Night]

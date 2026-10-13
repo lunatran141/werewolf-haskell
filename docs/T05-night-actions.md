@@ -1,455 +1,189 @@
+# T05 — Night Actions, Night UI & Server Integration
 
-# T05 - Night Actions, Rules, Commands/Events and Seeded RNG
+**Dự án:** Werewolf Haskell
+**Nhánh làm việc:** `feature/T05-night-actions`
+**Cập nhật:** 13/10/2026
+**Trạng thái:** Các vai Werewolf, Seer, Guard, Witch đã triển khai và kiểm thử; Hunter UI là phần chuẩn bị tích hợp T06, **chưa hoàn thiện end-to-end**.
 
-## 1. Overview
+## 1. Mục tiêu và phạm vi
 
-T05 đã triển khai logic xử lý giai đoạn Night trong trò chơi Ma Sói bằng Haskell.
+T05 thực hiện các hành động ban đêm, kiểm tra luật trong Pure Domain/Engine, kết nối Command/Event qua WebSocket và giao diện riêng theo vai. Server là nguồn xác thực danh tính, vai và trạng thái trò chơi. Client không được tự gọi các lệnh nội bộ `ResolveNight`, `ResolveHunter` hoặc `AdvancePhase`.
 
-Phạm vi bao gồm:
+| Vai | Hành động | Trạng thái |
+| --- | --- | --- |
+| Werewolf | `WolfTarget targetId` | Đã triển khai và kiểm thử |
+| Seer | `SeerTarget targetId` | Đã triển khai và kiểm thử, kết quả riêng tư |
+| Guard | `GuardTarget targetId` | Đã triển khai và kiểm thử |
+| Witch | `WitchHeal`, `WitchPoison targetId`, `WitchPass` | Đã triển khai và kiểm thử |
+| Hunter | `HunterShot targetId`, `HunterPass` | Có UI/Protocol/Broadcast; **chờ Engine T06** |
 
-- Night Rules cho Werewolf, Seer, Guard và Witch.
-- Validation cho các hành động ban đêm.
-- Xử lý kết quả Night và điều kiện thắng.
-- NightAction Command và Server Events.
-- Định tuyến sự kiện Private/Public qua WebSocket.
-- RNG hỗ trợ seed và generator injection.
-- Unit tests, property-based tests và WebSocket tests.
+**Ngoài phạm vi bàn giao UI T05:** màn hình Day, Voting UI và phần Pure Engine xử lý phát bắn Hunter thuộc T06.
 
-Nguyên tắc thiết kế:
+## 2. Luật và các điều kiện chính
 
-- Pure Engine không trực tiếp thực hiện IO hoặc gửi WebSocket.
-- GameState được cập nhật thông qua Command Processing.
-- PlayerId được xác định từ phiên kết nối Server.
-- Thông tin riêng tư chỉ được gửi đến người chơi có quyền nhận.
-- Logic ngẫu nhiên được tách khỏi Pure Engine để dễ kiểm thử và tái lập kết quả.
+### 2.1 Werewolf
 
-## 2. Night Rules
+- Chỉ Sói còn sống được chọn mục tiêu hợp lệ; không được cắn đồng đội Sói.
+- Mỗi Sói chỉ được gửi một phiếu trong đêm. Khi mọi Sói còn sống đã bỏ phiếu, Server gọi `closeWolfVoting state False`.
+- Mục tiêu có số phiếu cao nhất duy nhất sẽ bị tấn công; hòa phiếu không có nạn nhân theo `NoElimination`.
+- Sau khóa phiếu, Witch còn sống nhận `WitchVictimNotice` riêng tư.
+- API thuần hỗ trợ khóa phiếu khi timeout, nhưng cơ chế timeout thực tế chưa được nối với Server.
 
-### 2.1. Werewolf
+### 2.2 Seer
 
-Werewolf sử dụng hành động `WolfTarget targetId` để chọn mục tiêu.
+- Chọn một người chơi hợp lệ khác chính mình.
+- `SeerResult` trả về phe `Wolves` hoặc `Village` và chỉ gửi tới Seer đã thực hiện.
 
-Quy tắc:
+### 2.3 Guard
 
-- Chỉ Werewolf còn sống được bỏ phiếu.
-- Mục tiêu phải là người chơi còn sống thuộc phe Village.
-- Không được chọn đồng đội Werewolf.
-- Một Werewolf không được gửi hai hành động trong cùng đêm.
-- Sau khi khóa phiếu, Werewolf không được tiếp tục bỏ phiếu.
-- Kết quả được xác định từ các phiếu của Werewolf và chính sách xử lý hòa phiếu.
-
-### 2.2. Seer
-
-Seer sử dụng hành động `SeerTarget targetId`.
-
-Quy tắc:
-
-- Chỉ Seer còn sống được thực hiện.
-- Mục tiêu phải hợp lệ.
-- Seer không được soi chính mình.
-- Kết quả trả về phe `Wolves` hoặc `Village`.
-- `SeerResult` là sự kiện Private, chỉ Seer thực hiện hành động được nhận.
-
-### 2.3. Guard
-
-Guard sử dụng hành động `GuardTarget targetId`.
-
-Quy tắc:
-
-- Chỉ Guard còn sống được thực hiện.
-- Guard có thể tự bảo vệ.
+- Được tự bảo vệ.
 - Không được bảo vệ cùng một mục tiêu trong hai đêm liên tiếp.
-- Bảo vệ thành công có thể ngăn tác động tấn công từ Werewolf.
-- Bảo vệ không ngăn được Witch Poison.
+- Bảo vệ có thể ngăn đòn Sói, nhưng không ngăn thuốc độc của Witch.
 
-### 2.4. Witch
+### 2.4 Witch
 
-Witch hỗ trợ các hành động:
+- Mỗi đêm Witch gửi đúng một trong ba lựa chọn: Heal, Poison hoặc Pass.
+- Heal cần nạn nhân Sói hợp lệ và thuốc cứu còn sẵn; thông báo nạn nhân được gửi sau khi khóa phiếu Sói.
+- Poison yêu cầu mục tiêu hợp lệ, không được tự đầu độc, và có thuốc độc còn sẵn.
+- Pass không tiêu hao thuốc.
+- UI khóa lựa chọn khi nhận `NightActionAccepted`; các hành động và thông báo riêng tư không bị broadcast sang vai khác.
 
-| Action | Ý nghĩa |
-|---|---|
-| `WitchHeal` | Cứu nạn nhân bị Werewolf tấn công |
-| `WitchPoison targetId` | Dùng thuốc độc lên mục tiêu |
-| `WitchPass` | Bỏ lượt |
+### 2.5 Hunter — hợp đồng tích hợp T06
 
-Quy tắc:
+- Khi Hunter bị loại trong Night, `resolveNightTurn` có thể tạo `gamePendingHunter` và `HunterShotPending` (private).
+- UI Hunter khi còn sống chỉ hiển thị trạng thái chờ; nút Bắn/Bỏ lượt luôn bị khóa.
+- Khi nhận `HunterShotPending`, UI có thể chọn mục tiêu hoặc Pass, gửi `HunterAction`.
+- `Server.WebSocket` hiện trả `HUNTER_ENGINE_NOT_READY` đối với yêu cầu Hunter trong đúng phòng; **chưa cập nhật GameState hay xác nhận bắn thành công**.
+- Chỉ sau khi T06 bổ sung `ResolveHunter` và GameLoop kết nối thành công, hệ thống mới có thể phát `HunterShotResolved` thực tế và hoàn tất Night khi Hunter pending.
 
-- Chỉ Witch còn sống được thực hiện.
-- Heal và Poison phụ thuộc vào tài nguyên thuốc còn lại.
-- Heal chỉ hợp lệ sau khi phiếu Werewolf đã được khóa và xác định được nạn nhân.
-- Witch không được Poison chính mình.
-- WitchPass không tiêu hao thuốc.
-- `WitchVictimNotice` được gửi riêng cho Witch.
-
-## 3. Night Processing Flow
-
-Luồng xử lý được thiết kế như sau:
+## 3. Luồng Night ở Server
 
 ```text
-Night Phase
-    |
-    v
-Players submit NightAction
-    |
-    v
-Validate NightAction
-    |
-    v
-Store valid actions in GameState
-    |
-    v
-Close Wolf Voting
-    |
-    v
-Send private WitchVictimNotice
-    |
-    v
-Resolve Night Effects
-    |
-    v
-Update player status and resources
-    |
-    v
-Check Pending Hunter
-    |
-    +---- Hunter pending ---> Wait for T06 handling
-    |
-    v
-Complete Night
-    |
-    v
-Reveal dead player roles
-    |
-    v
-Check Win Conditions
-    |
-    +---- Winner/Draw ---> GameOver
-    |
-    v
-Day Phase
+Host StartGame (Server tự xáo vai)
+  -> PhaseChanged Night + YourRole riêng từng người
+  -> Các vai gửi NightAction hợp lệ
+  -> Khi mọi Sói bỏ phiếu: closeWolfVoting
+  -> WitchVictimNotice (chỉ Witch)
+  -> Khi các vai hành động còn sống đã hoàn thành:
+       resolveNightTurn
+       -> Hunter pending? Có: chờ T06, không công bố kết quả sớm
+       -> Không: completeNightTurn
+           -> PlayerRoleRevealed
+           -> PhaseChanged Day / GameFinished
 ```
 
-**Lưu ý:** Đây là luồng xử lý dự kiến khi tích hợp hoàn chỉnh. Hiện tại Pure Engine đã có các hàm nghiệp vụ tương ứng, nhưng Server chưa tự động điều phối toàn bộ các bước.
+`Server.GameLoop` hiện chỉ tự resolve khi các vai Werewolf, Seer, Guard, Witch còn sống đã gửi hành động, và `gameWolfVotingClosed=True`. Nếu còn người chưa hành động, mất kết nối hoặc không có timeout, đêm có thể chưa kết thúc. Không có Hunter pending thì `completeNightTurn` được gọi ngay trong cùng lần xử lý command thành công.
 
-### 3.1. Submit NightAction
+**Bảo vệ thông tin:** `Server.WebSocket.safeNightEvent` không phát trực tiếp `NightResolved deaths` nhằm tránh lộ danh sách chết trước khi hiệu ứng Hunter hoàn tất. Sau đó các sự kiện reveal/đổi phase được gửi theo hợp đồng của Domain.
 
-Hàm:
+## 4. JSON WebSocket
 
-```haskell
-submitNightAction
-  :: GameState
-  -> PlayerId
-  -> NightChoice
-  -> Either GameError (GameState, [DomainEvent])
-```
+Các command gửi từ Browser sử dụng `requestId`, `roomId` và `choice`, **không truyền PlayerId hay Role**; Server gắn actor dựa trên phiên WebSocket.
 
-Nhiệm vụ:
-
-1. Kiểm tra tính hợp lệ của hành động.
-2. Tạo các sự kiện riêng tư tương ứng.
-3. Lưu hành động hợp lệ vào `gameNightActions`.
-4. Trả về GameState mới cùng danh sách DomainEvents.
-
-Khi validation thất bại, hàm trả về `Left GameError`.
-
-### 3.2. Close Wolf Voting
-
-Hàm:
-
-```haskell
-closeWolfVoting
-  :: GameState
-  -> Bool
-  -> Either GameError (GameState, [DomainEvent])
-```
-
-Tham số `Bool` biểu diễn trạng thái hết thời gian do Server cung cấp.
-
-Hàm thực hiện:
-
-- Kiểm tra Phase Night.
-- Ngăn khóa phiếu nhiều lần.
-- Chỉ cho phép khóa khi đủ phiếu hoặc khi hết thời gian.
-- Đặt `gameWolfVotingClosed = True`.
-- Tạo `WitchVictimNotice` cho Witch còn sống.
-
-Client không được tự quyết định giá trị timeout.
-
-### 3.3. Resolve Night
-
-Hàm:
-
-```haskell
-resolveNightTurn
-  :: GameState
-  -> Either GameError (GameState, [DomainEvent])
-```
-
-Nhiệm vụ:
-
-- Kiểm tra điều kiện resolve.
-- Tổng hợp tác động các hành động Night.
-- Xác định người chết.
-- Cập nhật trạng thái người chơi.
-- Cập nhật tài nguyên Role.
-- Xóa các NightAction đã xử lý.
-- Đánh dấu `gameNightResolved = True`.
-- Tạo `NightResolved` và các sự kiện Hunter pending nếu có.
-
-Hàm không trực tiếp chuyển sang Day.
-
-### 3.4. Complete Night
-
-Hàm:
-
-```haskell
-completeNightTurn
-  :: GameState
-  -> Either GameError (GameState, [DomainEvent])
-```
-
-Nhiệm vụ:
-
-- Chỉ cho phép hoàn tất sau khi Night đã resolve.
-- Không cho chuyển pha khi Hunter còn pending.
-- Phát `PlayerRoleRevealed` cho các trường hợp hợp lệ.
-- Kiểm tra điều kiện thắng.
-- Chuyển sang Day hoặc GameOver.
-
-### 3.5. Win Conditions
-
-Hàm:
-
-```haskell
-nightGameResult :: GameState -> Maybe GameResult
-```
-
-Các trường hợp:
-
-| Điều kiện | Kết quả |
-|---|---|
-| Không còn người sống ở cả hai phe | `Draw` |
-| Không còn Werewolf sống | `Winner Village` |
-| Số Werewolf sống lớn hơn hoặc bằng số người Village sống | `Winner Wolves` |
-| Chưa thỏa điều kiện thắng | `Nothing` |
-
-## 4. Protocol - Client NightAction
-
-Client gửi NightAction qua WebSocket dưới dạng JSON.
-
-### 4.1. WolfTarget
+**Werewolf**
 
 ```json
-{
-  "type": "NightAction",
-  "requestId": "r01",
-  "roomId": "ROOM-01",
-  "choice": {
-    "action": "WolfTarget",
-    "targetId": "7"
-  }
-}
+{"type":"NightAction","requestId":"r01","roomId":"ROOM-01","choice":{"action":"WolfTarget","targetId":"p3"}}
 ```
 
-### 4.2. SeerTarget
+**Seer**
 
 ```json
-{
-  "type": "NightAction",
-  "requestId": "r02",
-  "roomId": "ROOM-01",
-  "choice": {
-    "action": "SeerTarget",
-    "targetId": "1"
-  }
-}
+{"type":"NightAction","requestId":"r02","roomId":"ROOM-01","choice":{"action":"SeerTarget","targetId":"p2"}}
 ```
 
-### 4.3. GuardTarget
+**Guard**
 
 ```json
-{
-  "type": "NightAction",
-  "requestId": "r03",
-  "roomId": "ROOM-01",
-  "choice": {
-    "action": "GuardTarget",
-    "targetId": "4"
-  }
-}
+{"type":"NightAction","requestId":"r03","roomId":"ROOM-01","choice":{"action":"GuardTarget","targetId":"p4"}}
 ```
 
-### 4.4. WitchHeal
+**Witch — Heal / Poison / Pass**
 
 ```json
-{
-  "type": "NightAction",
-  "requestId": "r04",
-  "roomId": "ROOM-01",
-  "choice": {
-    "action": "WitchHeal"
-  }
-}
+{"type":"NightAction","requestId":"r04","roomId":"ROOM-01","choice":{"action":"WitchHeal"}}
 ```
-
-### 4.5. WitchPoison
 
 ```json
-{
-  "type": "NightAction",
-  "requestId": "r05",
-  "roomId": "ROOM-01",
-  "choice": {
-    "action": "WitchPoison",
-    "targetId": "8"
-  }
-}
+{"type":"NightAction","requestId":"r05","roomId":"ROOM-01","choice":{"action":"WitchPoison","targetId":"p5"}}
 ```
-
-### 4.6. WitchPass
 
 ```json
-{
-  "type": "NightAction",
-  "requestId": "r06",
-  "roomId": "ROOM-01",
-  "choice": {
-    "action": "WitchPass"
-  }
-}
+{"type":"NightAction","requestId":"r06","roomId":"ROOM-01","choice":{"action":"WitchPass"}}
 ```
 
-**Security:** Client không gửi PlayerId hoặc Role trong NightAction. Server lấy PlayerId từ phiên WebSocket và xác định quyền hành động bằng GameState.
+**Hunter — đang chờ Engine T06**
 
-## 5. Server Events
+```json
+{"type":"HunterAction","requestId":"r07","roomId":"ROOM-01","choice":{"action":"HunterShot","targetId":"p5"}}
+```
 
-| Event | Phạm vi | Ý nghĩa |
-|---|---|---|
-| `NightActionAccepted` | Private | Xác nhận hành động Night hợp lệ |
-| `SeerResult` | Private | Kết quả soi của Seer |
-| `WitchVictimNotice` | Private | Thông báo nạn nhân cho Witch |
-| `NightResolved` | Public theo Domain contract | Kết quả xử lý Night |
-| `PlayerRoleRevealed` | Public | Công khai vai người chết |
-| `PhaseChanged` | Public | Thông báo chuyển Phase |
-| `GameFinished` | Public | Thông báo kết quả ván chơi |
+```json
+{"type":"HunterAction","requestId":"r08","roomId":"ROOM-01","choice":{"action":"HunterPass"}}
+```
 
-### 5.1. Event Routing
+### 4.1 Các sự kiện Server
 
-Hàm:
+| Sự kiện | Phạm vi | Ý nghĩa |
+| --- | --- | --- |
+| `YourRole` | Private | Vai do Server phân cho từng người |
+| `NightActionAccepted` | Private | Xác nhận hành động hợp lệ |
+| `SeerResult` | Private | Trả kết quả soi |
+| `WitchVictimNotice` | Private | Thông báo nạn nhân Sói cho Witch |
+| `HunterShotPending` | Private | Mở quyền bắn cho Hunter đang pending |
+| `HunterShotResolved` | Public theo Domain contract | Chỉ có khi Engine xử lý thực tế |
+| `NightResolved` | Public theo Domain contract; hiện được WebSocket chặn | Tránh reveal chết sớm |
+| `PlayerRoleRevealed` | Public | Công bố vai sau khi hiệu ứng chết được xử lý |
+| `PhaseChanged` | Public | Chuyển phase |
+| `GameFinished` | Public | Công bố người thắng/hòa |
+| `CommandRejected` | Trả riêng cho kết nối gửi lệnh | Lỗi command, kèm `requestId` khi xác định được |
+
+## 5. Seeded RNG và StartGame
+
+Module `src/Domain/RoleShuffle.hs` cung cấp:
 
 ```haskell
-nightMessagesFor
-  :: RoomId
-  -> PlayerId
-  -> [DomainEvent]
-  -> [ServerMessage]
+shuffleRoles :: RandomGen g => g -> [Role] -> ([Role], g)
+shuffleRolesWithSeed :: Int -> [Role] -> [Role]
 ```
 
-Nguyên tắc:
+- Cùng danh sách vai và cùng seed cho cùng kết quả, thuận tiện kiểm thử tái lập.
+- StartGame thực tế do Server sinh RNG (`newStdGen`) và dùng preset từ `expectedRoles` (8 hoặc 9 người).
+- Client không tự chọn vai hay gửi seed để thao túng phân vai.
 
-- `Public`: Được chuyển thành thông điệp cho từng client trong phòng.
-- `Private pid`: Chỉ chuyển thành thông điệp khi PlayerId người nhận khớp `pid`.
-- Event chưa có JSON contract trong router T05 sẽ bị bỏ qua.
+## 6. File liên quan
 
-Hàm `eventVisibility` trong `Domain.Types` xác định quyền nhận sự kiện.
+| File | Nội dung |
+| --- | --- |
+| `src/Domain/Types.hs` | Role, Phase, Command, NightChoice, DomainEvent, GameState |
+| `src/Domain/Validation.hs` | Điều kiện hợp lệ/invariant của state và hành động |
+| `src/Domain/Night.hs` | Tổng hợp phiếu Sói và hiệu ứng Night |
+| `src/Domain/Engine.hs` | Xử lý NightAction, resolve, complete, win conditions |
+| `src/Domain/RoleShuffle.hs` | Seeded RNG và xáo vai |
+| `src/Protocol/Types.hs` | JSON ClientMessage/ServerMessage |
+| `src/Server/Broadcast.hs` | Ánh xạ và lọc sự kiện private/public |
+| `src/Server/GameLoop.hs` | Dispatch, khóa phiếu, điều phối resolve/complete |
+| `src/Server/WebSocket.hs` | Session, phân vai, nhận/gửi thông điệp |
+| `web/index.html` | Lobby, Night panels và Hunter UI |
+| `web/app.js` | Hiển thị, gửi action, nhận events, trạng thái pending |
+| `web/style.css` | CSS Night panels, bảo đảm `[hidden]` được tôn trọng |
+| `test/T05NightSpec.hs` | Night logic, validation, win conditions |
+| `test/T05RngSpec.hs` | Kiểm thử RNG |
+| `test/T05WebSocketSpec.hs` | Kiểm thử WebSocket T05 |
+| `test/ProtocolLobbySpec.hs` | JSON round-trip và phân quyền sự kiện |
 
-**Lưu ý về NightResolved:** Mặc dù `NightResolved` có JSON contract, lớp WebSocket hiện đang lọc bỏ sự kiện này để tránh tiết lộ danh sách người chết trước khi Hunter và các death effects được xử lý hoàn tất.
+## 7. Kết quả kiểm thử được báo cáo
 
-### 5.2. NightAction Errors
-
-Server từ chối NightAction trong các trường hợp như:
-
-- Client chưa Join phòng.
-- RoomId không khớp với phòng của phiên kết nối.
-- GameState không ở Phase Night.
-- Người chơi không có Role phù hợp.
-- Người chơi đã chết.
-- Mục tiêu không hợp lệ.
-- Hành động trùng hoặc không thỏa điều kiện sử dụng.
-
-Các lỗi được gửi về thông qua `CommandRejected` và không cập nhật GameState khi Command bị từ chối.
-
-## 6. Seeded RNG and Generator Injection
-
-Module:
-
-```text
-src/Domain/RoleShuffle.hs
-```
-
-Các hàm chính:
-
-```haskell
-shuffleRoles
-  :: RandomGen g
-  => g
-  -> [Role]
-  -> ([Role], g)
-
-shuffleRolesWithSeed
-  :: Int
-  -> [Role]
-  -> [Role]
-```
-
-### 6.1. Seeded RNG
-
-Sử dụng `shuffleRolesWithSeed` khi cần kết quả tái lập từ một seed xác định.
-
-Ví dụ:
-
-```haskell
-roles1 = shuffleRolesWithSeed 42 roles
-roles2 = shuffleRolesWithSeed 42 roles
-```
-
-Với cùng danh sách đầu vào và cùng seed:
-
-```haskell
-roles1 == roles2
-```
-
-### 6.2. Generator Injection
-
-`shuffleRoles` nhận bộ sinh số ngẫu nhiên từ bên ngoài và trả về generator tiếp theo.
-
-Lợi ích:
-
-- Dễ kiểm thử.
-- Không phụ thuộc nguồn random toàn cục.
-- Bảo đảm tính tái lập.
-- Tách RNG khỏi Pure Engine.
-
-**Giới hạn:** Cơ chế RNG đã được triển khai và kiểm thử, nhưng chưa được kết nối vào toàn bộ luồng StartGame qua WebSocket.
-
-## 7. Testing
-
-### 7.1. Build
+Kiểm thử gần nhất trên Windows, GHC 9.6.6:
 
 ```powershell
+git diff --check
 cabal build all
-```
-
-### 7.2. Test All
-
-```powershell
 cabal test all --test-show-details=direct
 ```
 
-### 7.3. Test từng nhóm T05
-
-```powershell
-cabal test t05-night-test --test-show-details=direct
-cabal test t05-rng-test --test-show-details=direct
-cabal test t05-websocket-test --test-show-details=direct
-```
-
-### 7.4. Kết quả kiểm thử
-
-Kết quả tại thời điểm hoàn thành bản triển khai T05:
-
-| Test suite | Examples | Status |
-|---|---:|---|
+| Test suite | Examples | Kết quả |
+| --- | ---: | --- |
 | `skeleton-test` | 1 | PASS |
 | `t02-domain-test` | 38 | PASS |
 | `t03-lobby-test` | 17 | PASS |
@@ -459,72 +193,21 @@ Kết quả tại thời điểm hoàn thành bản triển khai T05:
 | `protocol-lobby-test` | 36 | PASS |
 | `server-gameloop-test` | 13 | PASS |
 | `t05-websocket-test` | 4 | PASS |
-| **Total** | **224** | **PASS** |
+| **Tổng** | **224** | **9/9 suite PASS** |
 
-Bộ test T05 kiểm tra:
+**Thử thủ công đã xác nhận:** Lobby/Ready/StartGame, riêng tư của YourRole, Sói/Seer/Guard/Witch, WitchHeal/Poison/Pass, tab Hunter còn sống hiển thị và khóa nút. Trang tải trên Microsoft Edge và đã kết nối WebSocket. Log WebSocket test có dòng `ConnectionClosed`, nhưng suite báo PASS.
 
-- Luật của Werewolf, Seer, Guard và Witch.
-- Ván chơi 8 và 9 người.
-- Các trường hợp hợp lệ, lỗi và edge cases.
-- Wolf Voting Lock và Witch Victim Notice.
-- Night Resolution và Win Conditions.
-- Seeded RNG và generator injection.
-- JSON serialization/deserialization.
-- Phân quyền private/public.
-- WebSocket validation và event delivery.
+**Không nên suy diễn:** Các suite Haskell không kiểm thử cú pháp frontend JavaScript; máy thử nghiệm không nhận lệnh `node`, và chưa có kiểm thử tự động Hunter end-to-end.
 
-Trong kiểm thử WebSocket, thông báo `ConnectionClosed` có thể xuất hiện khi đóng kết nối, nhưng bộ test đã báo PASS.
+## 8. Hạn chế, phụ thuộc và bàn giao
 
-## 8. Main Files
+- **Hunter (T06):** cần hàm Engine thực thi HunterShot/Pass, tích hợp GameLoop, kiểm thử authorization, pending, target và hoàn tất Night. Các nút Hunter đã có giao diện nhưng chưa bắn thành công.
+- **End-to-end ResolveNight → Day:** logic/server đã có, unit test PASS, nhưng chưa xác nhận đầy đủ bằng 8 tab Edge. Day UI nằm ngoài phạm vi UI T05.
+- **Timeout/mất kết nối:** chưa có cơ chế đóng đêm nếu vai bắt buộc không hành động.
+- **Thông tin sống/chết trên client:** `PlayerView` không có `lifeStatus`. Danh sách Hunter có thể chứa người đã chết nhưng chưa công bố; Server phải tiếp tục kiểm tra target.
+- **Test mới nên thêm khi tích hợp:** JSON HunterAction, `HunterShotPending` chỉ đúng client nhận, HunterShotResolved, và case Hunter pending không kết thúc Night sớm.
+- **Mã nguồn:** không commit file thử nghiệm `web/test-*.html`, `t05-review.diff`, `t05-ui-review.diff`.
 
-### Domain
+### Kết luận
 
-- `src/Domain/Night.hs`
-- `src/Domain/Engine.hs`
-- `src/Domain/Types.hs`
-- `src/Domain/Validation.hs`
-- `src/Domain/RoleShuffle.hs`
-
-### Protocol and Server
-
-- `src/Protocol/Types.hs`
-- `src/Server/Broadcast.hs`
-- `src/Server/GameLoop.hs`
-- `src/Server/WebSocket.hs`
-
-### Tests
-
-- `test/T05NightSpec.hs`
-- `test/T05RngSpec.hs`
-- `test/T05WebSocketSpec.hs`
-- `test/ProtocolLobbySpec.hs`
-
-### Build Configuration
-
-- `werewolf-server.cabal`
-
-## 9. Limitations and Integration Notes
-
-Các giới hạn hiện tại:
-
-1. Pure Engine đã có Night Rules và Night Resolution, nhưng Server chưa tự động gọi toàn bộ các bước trong vòng đời Night.
-2. RNG chưa được tích hợp với luồng StartGame WebSocket.
-3. UI cho NightAction chưa được xác nhận hoàn thiện.
-4. Hunter Shot/Pass thuộc phần việc T06; không được tự ý bỏ qua trạng thái Hunter pending.
-5. `NightResolved` chưa được gửi công khai từ WebSocket vì cần bảo vệ thông tin trước khi hoàn tất death effects.
-6. Việc đóng WebSocket có thể ghi log `ConnectionClosed`; cần tiếp tục xử lý sạch ngoại lệ này khi tích hợp.
-
-## 10. Conclusion
-
-T05 đã triển khai và kiểm thử các thành phần:
-
-- Night Rules và Validation.
-- Night Resolution và Win Conditions.
-- NightAction Command/Event.
-- Private/Public Event Routing.
-- Seeded RNG và Generator Injection.
-- GameLoop và WebSocket NightAction Integration.
-
-Kết quả kiểm thử gần nhất: **9/9 test suites PASS, 224 examples, 0 failures**.
-
-Các chức năng thuộc Pure Engine và giao thức đã sẵn sàng để nhóm review, đồng thời cần phối hợp với các phần StartGame, Hunter, Game Orchestration và UI để hoàn thành luồng chơi thực tế.
+T05 Night UI cho **Werewolf, Seer, Guard và Witch** đã sẵn sàng đưa lên nhánh để nhóm review. Phần Hunter UI/Protocol/Broadcast là **integration scaffold**, đang chờ Engine T06. Các phần chưa kiểm thử hoặc thuộc phạm vi thành viên khác không được ghi là đã hoàn thành.

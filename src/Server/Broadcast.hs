@@ -38,7 +38,6 @@ playerView player =
     (playerName player)
     (playerReady player)
 
-
 -- Gui rieng cho nguoi vua Join de biet ID, Host va danh sach phong.
 lobbySnapshot :: RoomId -> PlayerId -> GameState -> ServerMessage
 lobbySnapshot rid selfId state =
@@ -48,9 +47,8 @@ lobbySnapshot rid selfId state =
     (gameHost state)
     (map playerView (gamePlayers state))
 
-
 -- Chuyen cac event Lobby cong khai thanh thong diep JSON.
--- Event ve vai hoac thong tin bi mat khong duoc chuyen o day.
+-- Khong gui thong tin vai tro bi mat trong Lobby.
 lobbyMessages :: RoomId -> RoomUpdate -> [ServerMessage]
 lobbyMessages rid update =
   mapMaybe convert (updateEvents update)
@@ -79,9 +77,7 @@ lobbyMessages rid update =
         _ ->
           Nothing
 
-
 -- Phan hoi rieng cho ket noi da gui lenh.
--- GameLoop tra ve ket qua truoc khi gui phan hoi nay.
 lobbyReply
   :: RoomId
   -> RequestId
@@ -114,7 +110,6 @@ lobbyReply rid requestId actor command result =
             "INVALID_COMMAND"
             "Lenh khong thuoc Lobby."
 
-
 lobbyError :: GameError -> (String, String)
 lobbyError err =
   case err of
@@ -142,9 +137,8 @@ lobbyError err =
     _ ->
       ("COMMAND_REJECTED", "Khong the thuc hien lenh.")
 
--- T05 - Night Event Routing
+-- T05: Night Event Routing
 
--- Kiem tra mot DomainEvent co duoc gui cho client hay khong.
 -- Public: moi client trong phong duoc nhan.
 -- Private pid: chi client co PlayerId trung pid duoc nhan.
 canReceiveNightEvent :: PlayerId -> DomainEvent -> Bool
@@ -156,15 +150,8 @@ canReceiveNightEvent recipient event =
     Private pid ->
       recipient == pid
 
-
--- Chuyen DomainEvent thanh ServerMessage sau khi kiem tra
--- quyen nhan cua tung client.
---
--- Ham nay chi ho tro cac Night Event da co trong Protocol.
--- Nhung event chua co JSON contract se khong duoc gui.
---
--- Khong duoc truyen ket qua cua ham nay vao broadcast
--- chung cho toan bo client.
+-- Chuyen DomainEvent thanh ServerMessage cho tung client.
+-- Khong broadcast event Private cho toan bo phong.
 nightMessagesFor
   :: RoomId
   -> PlayerId
@@ -176,34 +163,52 @@ nightMessagesFor rid recipient events =
   where
     convert event =
       case event of
-        -- Xac nhan hanh dong, chi gui cho actor.
+        -- Role chi gui cho nguoi choi duoc phan vai.
+        PlayerRoleAssigned pid role
+          | pid == recipient ->
+              Just (MsgYourRole rid role)
+
+          | otherwise ->
+              Nothing
+
+        -- Xac nhan NightAction cho nguoi thuc hien.
         NightActionAccepted _ ->
           Just (MsgNightActionAccepted rid)
 
-        -- Ket qua soi, chi gui rieng cho Tien Tri.
+        -- Ket qua soi chi gui rieng cho Tien Tri.
         SeerResult _ team ->
           Just (MsgSeerResult rid team)
 
-        -- Nan nhan Soi, chi gui rieng cho Phu Thuy.
+        -- Nan nhan Soi chi gui rieng cho Phu Thuy.
         WitchVictimNotice _ victim ->
           Just (MsgWitchVictimNotice rid victim)
 
-        -- Ket qua dem: event cong khai theo contract hien tai.
+        -- Ket qua dem theo Domain Contract.
         NightResolved deaths ->
           Just (MsgNightResolved rid deaths)
 
-        -- Cong khai Role/Team cua nguoi da chet.
+        -- T06: chi Hunter dang pending nhan quyen ban.
+        -- EventVisibility cua HunterShotPending la Private.
+        HunterShotPending _ ->
+          Just (MsgHunterShotPending rid)
+
+        -- T06: chi phat khi Engine da xu ly Hunter thanh cong.
+        -- Event nay la Public theo Domain Contract hien tai.
+        HunterShotResolved hunterId targetId ->
+          Just (MsgHunterShotResolved rid hunterId targetId)
+
+        -- Cong khai Role va Team cua nguoi da chet.
         PlayerRoleRevealed pid role team ->
           Just (MsgPlayerRoleRevealed rid pid role team)
 
-        -- Chuyen Phase.
+        -- Thong bao chuyen Phase.
         PhaseChanged phase ->
           Just (MsgPhaseChanged rid phase)
 
-        -- Ket thuc van.
+        -- Thong bao ket qua van choi.
         GameFinished result ->
           Just (MsgGameFinished rid result)
 
-        -- Khong chuyen event khac trong T05 router.
+        -- Khong gui event chua co JSON Contract.
         _ ->
           Nothing
