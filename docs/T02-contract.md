@@ -3,7 +3,7 @@
 **Dự án:** Werewolf Haskell
 **Task:** T02 – Domain Types & Validation
 **Owner:** TV1
-**Tài liệu luật tham chiếu:** `docs/game-rules.md` (v4.0)
+**Tài liệu luật tham chiếu:** `docs/T01-game-rules.md` (v4.0)
 **Phạm vi:** Domain Types, Smart Constructor, Validation, GameState Invariant và hợp đồng tích hợp chung.
 
 ## 1. Mục tiêu

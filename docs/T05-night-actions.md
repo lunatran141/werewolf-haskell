@@ -1,5 +1,7 @@
 # T05 — Night Actions, Night UI & Server Integration
 
+> **Ghi chú tích hợp T06 (14/10/2026):** Bản ghép giữ StartGame/Night UI và điều phối T05, đã nối `HunterAction` tới Engine T06 thay cho `HUNTER_ENGINE_NOT_READY`. Hunter UI dùng chung ở Night/Voting; kết quả có `hunterId` như contract T05. Test 8 kết nối thật xác nhận Start → Night → Hunter → Day → điểm nối Voting. Các mô tả scaffold/kết quả bên dưới là lịch sử của bản T05 ngày 13/10; trạng thái và giới hạn sau ghép xem [T06-vote.md](T06-vote.md).
+
 **Dự án:** Werewolf Haskell
 **Nhánh làm việc:** `feature/T05-night-actions`
 **Cập nhật:** 13/10/2026

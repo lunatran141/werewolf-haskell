@@ -5,6 +5,7 @@ module Server.Broadcast
   , lobbyMessages
   , lobbyReply
   , nightMessagesFor
+  , votingSnapshot
   ) where
 
 import Data.Maybe (mapMaybe)
@@ -17,17 +18,32 @@ import Domain.Types
   , GameState(..)
   , Player(..)
   , PlayerId
+  , LifeStatus(..)
   , eventVisibility
   )
 
 import Protocol.Types
   ( PlayerView(..)
+  , VotingPlayerView(..)
   , RequestId
   , RoomId
   , ServerMessage(..)
   )
 
 import Server.Room (RoomUpdate(..))
+
+-- T06: Người chết đang chờ Hunter vẫn hiển thị như trước batch với người khác.
+-- Chỉ Hunter biết mình có quyền bắn; không lộ danh sách chết trước reveal.
+votingSnapshot :: RoomId -> PlayerId -> GameState -> ServerMessage
+votingSnapshot rid recipient state = MsgVotingSnapshot rid
+  (gamePhase state) (gameDay state)
+  [ VotingPlayerView (playerId p) (playerName p)
+      (playerLifeStatus p == Alive || playerId p `elem` gamePendingReveals state)
+  | p <- gamePlayers state ]
+  (recipient `elem` map fst (gameVotes state))
+  (gamePendingHunter state == Just recipient)
+  (gameVotingResolved state)
+  (gameResult state)
 
 -- Lobby
 
@@ -137,7 +153,7 @@ lobbyError err =
     _ ->
       ("COMMAND_REJECTED", "Khong the thuc hien lenh.")
 
--- T05: Night Event Routing
+-- T05/T06 - Night, Vote va death event routing
 
 -- Public: moi client trong phong duoc nhan.
 -- Private pid: chi client co PlayerId trung pid duoc nhan.
@@ -209,6 +225,17 @@ nightMessagesFor rid recipient events =
         GameFinished result ->
           Just (MsgGameFinished rid result)
 
-        -- Khong gui event chua co JSON Contract.
+        -- VoteUpdated da duoc eventVisibility loc private theo voter.
+        -- Message khong chua target de khong lo ro lua chon ca nhan.
+        VoteUpdated _ _ ->
+          Just (MsgVoteUpdated rid)
+
+        VotingResolved tally target -> Just (MsgVotingResolved rid tally target)
+
+        -- Ket qua lynch va reveal la public sau khi batch death da xong.
+        PlayerEliminated pid ->
+          Just (MsgPlayerEliminated rid pid)
+
+        -- Khong chuyen event khac chua co JSON contract.
         _ ->
           Nothing

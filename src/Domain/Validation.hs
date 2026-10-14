@@ -294,10 +294,11 @@ validateHunterShot game actor target = do
     Nothing ->
       Right ()
     Just pid -> do
-      _ <- validateLivingTarget pid (gamePlayers game)
       if pid == actor
         then Left InvalidTarget
-        else Right ()
+        else do
+          _ <- validateLivingTarget pid (gamePlayers game)
+          Right ()
 
 -- Invariant phải đúng sau mỗi lần Engine cập nhật GameState.
 validateGameInvariant :: GameState -> Either GameError ()
@@ -313,6 +314,22 @@ validateGameInvariant game = do
             (gameVotes game)
           && all (\(actor, _) -> actor `elem` ids)
                  (gameNightActions game)
+          && all (`elem` ids) (gamePendingReveals game)
+      pendingRevealsOk =
+        not (hasDuplicates (gamePendingReveals game))
+          && all pendingRevealIsDead (gamePendingReveals game)
+      voteEntriesOk =
+        all validVoteEntry (gameVotes game)
+      validVoteEntry (actor, target) =
+        actor /= target
+          && maybe False ((== Alive) . playerLifeStatus)
+               (validateById actor ps)
+          && maybe False ((== Alive) . playerLifeStatus)
+               (validateById target ps)
+      pendingRevealIsDead pid =
+        case validateById pid ps of
+          Just player -> playerLifeStatus player == Dead
+          Nothing -> False
       hostOk =
         if null ps
           then null (gameHost game)
@@ -327,7 +344,7 @@ validateGameInvariant game = do
     then Right ()
     else Left RoomFull
 
-  if hostOk && uniqueActors && refsOk
+  if hostOk && uniqueActors && refsOk && pendingRevealsOk && voteEntriesOk
     then Right ()
     else Left InvalidGameState
 
@@ -406,3 +423,13 @@ validateGameInvariant game = do
   if gameWolfVotingClosed game && gamePhase game /= Night
     then Left InvalidGameState
     else Right ()
+
+-- Tìm Player trong invariant bằng Maybe để không tạo lỗi phụ khi dữ liệu
+-- đang hỏng; refsOk đã kiểm tra ID tồn tại trước đó.
+validateById :: PlayerId -> [Player] -> Maybe Player
+validateById pid = go
+  where
+    go [] = Nothing
+    go (player : rest)
+      | playerId player == pid = Just player
+      | otherwise = go rest

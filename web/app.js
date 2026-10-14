@@ -23,6 +23,13 @@ const state = {
   hunterMessage: ""
 };
 
+// T06: Chỉ lưu dữ liệu server cho phép xem; không chứa vai của người còn sống.
+const voting = {
+  phase: "Lobby", day: 0, players: [], hasVoted: false,
+  canShoot: false, resolved: false, result: null, tally: [],
+  summary: "", reveals: []
+};
+
 const el = {
   status: document.querySelector("#connection-status"),
   message: document.querySelector("#message"),
@@ -91,6 +98,85 @@ const roleDescriptions = {
   Hunter: "Nếu bị loại, bạn có thể bắn một người hoặc bỏ lượt khi Server cấp quyền."
 };
 
+// Các phần tử mới độc lập với bố cục phòng chờ đã có của nhóm.
+const voteEl = Object.fromEntries([
+  "voting-section", "voting-title", "voting-status", "vote-form",
+  "vote-target", "vote-button", "vote-result", "vote-tally", "vote-reveals"
+].map(id => [id, document.getElementById(id)]));
+
+function playerLabel(pid) {
+  return voting.players.find(p => p.playerId === pid)?.displayName || pid;
+}
+
+// UI chỉ mở thao tác theo snapshot; server vẫn xác thực lại mọi lệnh.
+function canChooseTarget() {
+  const me = voting.players.find(p => p.playerId === state.selfPlayerId);
+  return state.phase === "Voting" && !voting.resolved &&
+    !voting.hasVoted && me?.alive === true && !state.hunterPending;
+}
+
+function renderVoting() {
+  const active = state.selfPlayerId !== null && voting.phase !== "Lobby";
+  voteEl["voting-section"].hidden = !active;
+  el.readyButton.hidden = active;
+  el.leaveButton.disabled = active || !state.connected || state.pending !== null;
+  if (!active) {
+    voteEl["vote-target"].disabled = true;
+    voteEl["vote-button"].disabled = true;
+    return;
+  }
+
+  const phaseNames = {Night: "Ban đêm", Day: "Thảo luận", Voting: "Bỏ phiếu", GameOver: "Kết thúc"};
+  voteEl["voting-title"].textContent = `${phaseNames[voting.phase] || voting.phase} · Vòng ${voting.day}`;
+  const me = voting.players.find(p => p.playerId === state.selfPlayerId);
+  const allowed = canChooseTarget() && state.connected && state.pending === null;
+  el.selfStatus.textContent = me?.alive ? "Bạn đang tham gia ván chơi." : "Bạn đang theo dõi ván chơi.";
+  el.readyCount.textContent = `${voting.players.filter(p => p.alive).length}/${voting.players.length} còn sống`;
+  const target = voteEl["vote-target"];
+  const previous = target.value;
+  target.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "— Chọn mục tiêu —";
+  target.appendChild(placeholder);
+  for (const player of voting.players.filter(p => p.alive && p.playerId !== state.selfPlayerId)) {
+    const option = document.createElement("option");
+    option.value = player.playerId;
+    option.textContent = player.displayName;
+    target.appendChild(option);
+  }
+  if (voting.players.some(p => p.alive && p.playerId !== state.selfPlayerId && p.playerId === previous)) {
+    target.value = previous;
+  }
+  target.disabled = !allowed;
+  voteEl["vote-button"].disabled = !allowed || !target.value;
+  voteEl["vote-button"].textContent = "Gửi phiếu";
+
+  const status = !state.connected ? "Mất kết nối. Không thể gửi lựa chọn."
+    : state.pending ? "Đang chờ server xác nhận…"
+    : voting.canShoot ? "Bạn là Thợ săn vừa bị loại. Chọn bắn hoặc bỏ qua; hết thời hạn sẽ tự bỏ qua."
+    : voting.result ? ({Draw: "Ván chơi hòa.", WinnerVillage: "Phe Dân thắng!", WinnerWolves: "Phe Sói thắng!"}[voting.result])
+    : voting.resolved ? "Đã khóa phiếu. Đang hoàn tất kết quả lượt chơi."
+    : voting.phase !== "Voting" ? "Chưa đến thời gian bỏ phiếu."
+    : !me?.alive ? "Bạn đã bị loại và chỉ có thể theo dõi."
+    : voting.hasVoted ? "Server đã nhận phiếu của bạn. Không thể đổi lựa chọn trong vòng này."
+    : "Hãy chọn người bị nghi ngờ. Hòa cao nhất hoặc không có phiếu sẽ không loại ai.";
+  voteEl["voting-status"].textContent = status;
+  voteEl["vote-result"].textContent = voting.summary;
+  voteEl["vote-tally"].replaceChildren();
+  for (const [pid, count] of voting.tally) {
+    const item = document.createElement("li");
+    item.textContent = `${playerLabel(pid)}: ${count} phiếu`;
+    voteEl["vote-tally"].appendChild(item);
+  }
+  voteEl["vote-reveals"].replaceChildren();
+  for (const reveal of voting.reveals) {
+    const item = document.createElement("li");
+    item.textContent = `${playerLabel(reveal.playerId)} đã bị loại — ${reveal.role} (${reveal.team})`;
+    voteEl["vote-reveals"].appendChild(item);
+  }
+}
+
 function normalizePlayerName(name) {
   return name.trim().replace(/\s+/gu, " ");
 }
@@ -130,6 +216,8 @@ function resetRoomState() {
   state.players = [];
   state.pending = null;
   resetNightState();
+  Object.assign(voting, {phase: "Lobby", day: 0, players: [], hasVoted: false,
+    canShoot: false, resolved: false, result: null, tally: [], summary: "", reveals: []});
 }
 
 function canStartGame() {
@@ -275,16 +363,16 @@ function setTargetOptions(select, players) {
 }
 
 function renderNightTargets() {
-  const otherPlayers = state.players.filter(
-    player => player.playerId !== state.selfPlayerId
-  );
+  // Snapshot chỉ bổ sung trạng thái sống công khai, không bổ sung vai của người khác.
+  const alivePlayers = state.players.filter(player => player.alive !== false);
+  const otherPlayers = alivePlayers.filter(player => player.playerId !== state.selfPlayerId);
 
   // PlayerView chua co alive va team.
   // UI chi loc muc tieu theo thong tin duoc phep biet.
   // Server van phai validate moi NightAction.
   setTargetOptions(el.wolfTarget, otherPlayers);
   setTargetOptions(el.seerTarget, otherPlayers);
-  setTargetOptions(el.guardTarget, state.players);
+  setTargetOptions(el.guardTarget, alivePlayers);
   setTargetOptions(el.witchTarget, otherPlayers);
 
   // PlayerView chua co lifeStatus; Server phai validate Hunter target.
@@ -322,13 +410,12 @@ function renderNight() {
     state.connected &&
     state.pending === null &&
     role !== null &&
-    !state.nightActionDone;
+    !state.nightActionDone && getSelfPlayer()?.alive !== false && !state.hunterPending;
 
   el.wolfPanel.hidden = role !== "Werewolf";
   el.seerPanel.hidden = role !== "Seer";
   el.guardPanel.hidden = role !== "Guard";
   el.witchPanel.hidden = role !== "Witch";
-  el.hunterPanel.hidden = role !== "Hunter";
 
   el.nightWaitingPanel.hidden =
     role === "Werewolf" ||
@@ -360,24 +447,6 @@ function renderNight() {
     !canAct || !el.witchTarget.value;
 
   el.witchPass.disabled = !canAct;
-
-  // Hunter khong duoc ban neu chua co HunterShotPending.
-  const canHunterAct = state.connected &&
-    state.pending === null &&
-    role === "Hunter" &&
-    state.hunterPending &&
-    !state.hunterActionDone;
-
-  el.hunterPendingPanel.hidden = !state.hunterPending;
-  el.hunterTarget.disabled = !canHunterAct;
-  el.hunterShoot.disabled =
-    !canHunterAct || !el.hunterTarget.value;
-  el.hunterPass.disabled = !canHunterAct;
-
-  el.hunterStatus.textContent = state.hunterMessage ||
-    (state.hunterPending
-      ? "Bạn đã được quyền bắn hoặc bỏ lượt."
-      : "Đang chờ thông báo từ Server.");
 
   if (state.nightMessage) {
     el.nightStatus.textContent = state.nightMessage;
@@ -413,6 +482,25 @@ function renderNight() {
   }
 }
 
+// T06: Một bảng Hunter dùng chung cho Night và Voting, không phụ thuộc panel Night.
+function renderHunter() {
+  const active = state.selfPlayerId !== null && state.selfRole === "Hunter" &&
+    (state.phase === "Night" || state.hunterPending);
+  el.hunterPanel.hidden = !active;
+  const allowed = active && state.connected && state.pending === null &&
+    state.hunterPending && !state.hunterActionDone && ["Night", "Voting"].includes(state.phase);
+  setTargetOptions(el.hunterTarget, state.players.filter(p =>
+    p.playerId !== state.selfPlayerId && p.alive !== false && !state.revealedRoles[p.playerId]));
+  el.hunterPendingPanel.hidden = !state.hunterPending;
+  el.hunterTarget.disabled = !allowed;
+  el.hunterShoot.disabled = !allowed || !el.hunterTarget.value;
+  el.hunterPass.disabled = !allowed;
+  el.hunterStatus.textContent = !state.connected ? "Mất kết nối. Không thể gửi lựa chọn."
+    : state.hunterMessage || (state.hunterPending
+      ? "Bạn có thể bắn hoặc bỏ lượt; hết hạn sẽ tự bỏ qua."
+      : "Đang chờ thông báo từ Server.");
+}
+
 function render() {
   el.status.textContent = state.connected
     ? "Đã kết nối Server"
@@ -425,6 +513,8 @@ function render() {
 
   renderLobby();
   renderNight();
+  renderVoting();
+  renderHunter();
 }
 
 function sendCommand(type, fields = {}) {
@@ -465,7 +555,7 @@ function sendNightAction(choice) {
     state.phase !== "Night" ||
     state.selfRole === null ||
     state.selfPlayerId === null ||
-    state.nightActionDone
+    state.nightActionDone || getSelfPlayer()?.alive === false || state.hunterPending
   ) {
     state.error = "Bạn chưa được phép hành động trong đêm.";
     render();
@@ -486,7 +576,7 @@ function handleNightAccepted() {
 
 function sendHunterAction(choice) {
   if (
-    state.phase !== "Night" ||
+    !["Night", "Voting"].includes(state.phase) ||
     state.selfRole !== "Hunter" ||
     !state.hunterPending ||
     state.hunterActionDone ||
@@ -503,7 +593,13 @@ function sendHunterAction(choice) {
 function handlePhaseChanged(phase) {
   const previousPhase = state.phase;
 
+  // Đồng bộ một phase cho cả T05 và T06; xóa kết quả cũ khi bắt đầu Voting mới.
+  if (phase === "Voting" && voting.phase !== "Voting") {
+    voting.summary = "";
+    voting.tally = [];
+  }
   state.phase = phase;
+  voting.phase = phase;
 
   // PhaseChanged Night xac nhan StartGame da thanh cong.
   if (
@@ -532,8 +628,44 @@ function handlePhaseChanged(phase) {
     state.hunterActionDone = false;
     state.hunterMessage = "";
   }
-}function handleServerMessage(message) {
+}
+
+function handleServerMessage(message) {
+  // Không áp dụng thông điệp của phòng khác vào UI đang mở.
+  if (message.roomId && state.roomId && message.roomId !== state.roomId && message.type !== "LobbySnapshot") return;
   switch (message.type) {
+    case "VotingSnapshot":
+      // Day và Voting cùng số vòng: phải xét cả chuyển phase để xóa tally cũ.
+      if (message.phase === "Voting" && (voting.phase !== "Voting" || message.day !== voting.day)) {
+        voting.summary = "";
+        voting.tally = [];
+      }
+      if (state.phase !== message.phase) handlePhaseChanged(message.phase);
+      Object.assign(voting, {
+        phase: message.phase, day: message.day, players: message.players,
+        hasVoted: message.hasVoted, canShoot: message.canShoot,
+        resolved: message.resolved, result: message.result
+      });
+      state.hunterPending = message.canShoot;
+      if (message.canShoot) state.hunterActionDone = false;
+      state.players = message.players.map(player => ({
+        ...state.players.find(p => p.playerId === player.playerId), ...player
+      }));
+      break;
+
+    case "ActionAccepted":
+      if (message.requestId === state.pending?.requestId) state.pending = null;
+      break;
+
+    case "VotingResolved":
+      voting.tally = message.tally;
+      voting.resolved = true;
+      voting.summary = message.targetId
+        ? `${playerLabel(message.targetId)} có số phiếu cao nhất duy nhất. Đang xử lý kết quả.`
+        : message.tally.length ? "Hòa phiếu cao nhất: không loại ai, không bỏ phiếu lại."
+        : "Không có phiếu: không loại ai.";
+      break;
+
     case "LobbySnapshot":
       state.roomId = message.roomId;
       state.selfPlayerId = message.selfPlayerId;
@@ -637,6 +769,7 @@ function handlePhaseChanged(phase) {
 
     case "HunterShotResolved":
       if (message.roomId === state.roomId) {
+        voting.canShoot = false;
         if (
           state.selfRole === "Hunter" &&
           message.hunterId === state.selfPlayerId
@@ -661,6 +794,7 @@ function handlePhaseChanged(phase) {
 
     case "PlayerRoleRevealed":
       if (message.roomId === state.roomId) {
+        if (!voting.reveals.some(p => p.playerId === message.playerId)) voting.reveals.push(message);
         state.revealedRoles[message.playerId] = {
           role: message.role,
           team: message.team
@@ -770,6 +904,15 @@ el.readyButton.addEventListener("click", () => {
 
 el.leaveButton.addEventListener("click", () => {
   sendCommand("LeaveGame");
+});
+
+// T06: Chặn bấm lặp ngay ở UI; payload không chứa ID người gửi hay vai.
+voteEl["vote-target"].addEventListener("change", renderVoting);
+voteEl["vote-form"].addEventListener("submit", event => {
+  event.preventDefault();
+  const targetId = voteEl["vote-target"].value;
+  if (!canChooseTarget() || !targetId) return;
+  sendCommand("Vote", {targetId});
 });
 
 // Chi Host duoc phep gui StartGame tu giao dien.

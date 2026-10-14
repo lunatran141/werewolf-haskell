@@ -45,6 +45,8 @@ data RoomRuntime = RoomRuntime
   , roomCommands :: TBQueue QueuedCommand
   , roomUpdates  :: TChan RoomUpdate
   , roomNextPlayerId :: TVar Int
+  -- Request Vote/Hunter đã thành công, lưu theo actor suốt vòng đời phòng.
+  , roomAcceptedRequests :: TVar [(PlayerId, RequestId)]
   }
 
 newRoomRuntime :: RoomId -> IO RoomRuntime
@@ -54,6 +56,7 @@ newRoomRuntime rid = do
   commandQueue <- newTBQueueIO 128
   updateChannel <- newBroadcastTChanIO
   playerIdCounter <- newTVarIO 1
+  acceptedRequests <- newTVarIO []
   pure RoomRuntime
     { roomId = rid
     , roomState = stateVar
@@ -61,6 +64,7 @@ newRoomRuntime rid = do
     , roomCommands = commandQueue
     , roomUpdates = updateChannel
     , roomNextPlayerId = playerIdCounter
+    , roomAcceptedRequests = acceptedRequests
     }
 
 -- Danh sách các phòng đã tạo. MVar bảo vệ thao tác kiểm tra mã trùng
