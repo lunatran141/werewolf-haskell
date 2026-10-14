@@ -13,6 +13,13 @@ const state = {
   error: ""
 };
 
+// T06: Chỉ lưu dữ liệu server cho phép xem; không chứa vai của người còn sống.
+const voting = {
+  phase: "Lobby", day: 0, players: [], hasVoted: false,
+  canShoot: false, resolved: false, result: null, tally: [],
+  summary: "", reveals: []
+};
+
 const el = {
   status: document.querySelector("#connection-status"),
   message: document.querySelector("#message"),
@@ -31,6 +38,83 @@ const el = {
   readyButton: document.querySelector("#ready-button"),
   leaveButton: document.querySelector("#leave-button")
 };
+
+// Các phần tử mới độc lập với bố cục phòng chờ đã có của nhóm.
+const voteEl = Object.fromEntries([
+  "voting-section", "voting-title", "voting-status", "vote-form",
+  "vote-target", "vote-button", "hunter-pass", "vote-result", "vote-tally", "vote-reveals"
+].map(id => [id, document.getElementById(id)]));
+
+function playerLabel(pid) {
+  return voting.players.find(p => p.playerId === pid)?.displayName || pid;
+}
+
+// UI chỉ mở thao tác theo snapshot; server vẫn xác thực lại mọi lệnh.
+function canChooseTarget() {
+  const me = voting.players.find(p => p.playerId === state.selfPlayerId);
+  return voting.canShoot || (voting.phase === "Voting" && !voting.resolved &&
+    !voting.hasVoted && me?.alive === true);
+}
+
+function renderVoting() {
+  const active = state.selfPlayerId !== null && voting.phase !== "Lobby";
+  voteEl["voting-section"].hidden = !active;
+  el.readyButton.hidden = active;
+  el.leaveButton.disabled = active || !state.connected || state.pending !== null;
+  if (!active) return;
+
+  const phaseNames = {Night: "Ban đêm", Day: "Thảo luận", Voting: "Bỏ phiếu", GameOver: "Kết thúc"};
+  voteEl["voting-title"].textContent = `${phaseNames[voting.phase] || voting.phase} · Vòng ${voting.day}`;
+  const me = voting.players.find(p => p.playerId === state.selfPlayerId);
+  const allowed = canChooseTarget() && state.connected && state.pending === null;
+  el.selfStatus.textContent = me?.alive ? "Bạn đang tham gia ván chơi." : "Bạn đang theo dõi ván chơi.";
+  el.readyCount.textContent = `${voting.players.filter(p => p.alive).length}/${voting.players.length} còn sống`;
+  const target = voteEl["vote-target"];
+  const previous = target.value;
+  target.replaceChildren();
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "— Chọn mục tiêu —";
+  target.appendChild(placeholder);
+  for (const player of voting.players.filter(p => p.alive && p.playerId !== state.selfPlayerId)) {
+    const option = document.createElement("option");
+    option.value = player.playerId;
+    option.textContent = player.displayName;
+    target.appendChild(option);
+  }
+  if (voting.players.some(p => p.alive && p.playerId !== state.selfPlayerId && p.playerId === previous)) {
+    target.value = previous;
+  }
+  target.disabled = !allowed;
+  voteEl["vote-button"].disabled = !allowed || !target.value;
+  voteEl["vote-button"].textContent = voting.canShoot ? "Bắn mục tiêu" : "Gửi phiếu";
+  voteEl["hunter-pass"].hidden = !voting.canShoot;
+  voteEl["hunter-pass"].disabled = !allowed;
+
+  const status = !state.connected ? "Mất kết nối. Không thể gửi lựa chọn."
+    : state.pending ? "Đang chờ server xác nhận…"
+    : voting.canShoot ? "Bạn là Thợ săn vừa bị loại. Chọn bắn hoặc bỏ qua; hết thời hạn sẽ tự bỏ qua."
+    : voting.result ? ({Draw: "Ván chơi hòa.", WinnerVillage: "Phe Dân thắng!", WinnerWolves: "Phe Sói thắng!"}[voting.result])
+    : voting.resolved ? "Đã khóa phiếu. Đang hoàn tất kết quả lượt chơi."
+    : voting.phase !== "Voting" ? "Chưa đến thời gian bỏ phiếu."
+    : !me?.alive ? "Bạn đã bị loại và chỉ có thể theo dõi."
+    : voting.hasVoted ? "Server đã nhận phiếu của bạn. Không thể đổi lựa chọn trong vòng này."
+    : "Hãy chọn người bị nghi ngờ. Hòa cao nhất hoặc không có phiếu sẽ không loại ai.";
+  voteEl["voting-status"].textContent = status;
+  voteEl["vote-result"].textContent = voting.summary;
+  voteEl["vote-tally"].replaceChildren();
+  for (const [pid, count] of voting.tally) {
+    const item = document.createElement("li");
+    item.textContent = `${playerLabel(pid)}: ${count} phiếu`;
+    voteEl["vote-tally"].appendChild(item);
+  }
+  voteEl["vote-reveals"].replaceChildren();
+  for (const reveal of voting.reveals) {
+    const item = document.createElement("li");
+    item.textContent = `${playerLabel(reveal.playerId)} đã bị loại — ${reveal.role} (${reveal.team})`;
+    voteEl["vote-reveals"].appendChild(item);
+  }
+}
 
 function normalizePlayerName(name) {
   return name.trim().replace(/\s+/gu, " ");
@@ -131,6 +215,7 @@ function render() {
       ? "Bạn đã sẵn sàng. Hãy chờ những người chơi khác."
       : "Bạn chưa sẵn sàng. Nhấn nút khi đã chuẩn bị xong."
     : "";
+  renderVoting();
 }
 
 function sendCommand(type, fields = {}) {
@@ -168,7 +253,42 @@ function sendCommand(type, fields = {}) {
 }
 
 function handleServerMessage(message) {
+  // Không áp dụng thông điệp của phòng khác vào UI đang mở.
+  if (message.roomId && state.roomId && message.roomId !== state.roomId && message.type !== "LobbySnapshot") return;
   switch (message.type) {
+    case "VotingSnapshot":
+      // Day và Voting cùng số vòng: phải xét cả chuyển phase để xóa tally cũ.
+      if (message.phase === "Voting" && (voting.phase !== "Voting" || message.day !== voting.day)) {
+        voting.summary = "";
+        voting.tally = [];
+      }
+      Object.assign(voting, {
+        phase: message.phase, day: message.day, players: message.players,
+        hasVoted: message.hasVoted, canShoot: message.canShoot,
+        resolved: message.resolved, result: message.result
+      });
+      break;
+
+    case "ActionAccepted":
+      if (message.requestId === state.pending?.requestId) state.pending = null;
+      break;
+
+    case "VotingResolved":
+      voting.tally = message.tally;
+      voting.resolved = true;
+      voting.summary = message.targetId
+        ? `${playerLabel(message.targetId)} có số phiếu cao nhất duy nhất. Đang xử lý kết quả.`
+        : message.tally.length ? "Hòa phiếu cao nhất: không loại ai, không bỏ phiếu lại."
+        : "Không có phiếu: không loại ai.";
+      break;
+
+    case "PlayerRoleRevealed":
+      if (!voting.reveals.some(p => p.playerId === message.playerId)) voting.reveals.push(message);
+      break;
+
+    case "HunterShotResolved":
+      voting.canShoot = false;
+      break;
     case "LobbySnapshot":
       state.roomId = message.roomId;
       state.selfPlayerId = message.selfPlayerId;
@@ -203,6 +323,8 @@ function handleServerMessage(message) {
         state.roomId = null;
         state.players = [];
         state.pending = null;
+        Object.assign(voting, {phase: "Lobby", players: [], hasVoted: false,
+          canShoot: false, resolved: false, result: null, tally: [], summary: "", reveals: [], day: 0});
       }
       break;
 
@@ -283,6 +405,18 @@ el.readyButton.addEventListener("click", () => {
 
 el.leaveButton.addEventListener("click", () => {
   sendCommand("LeaveGame");
+});
+
+// T06: Chặn bấm lặp ngay ở UI; payload không chứa ID người gửi hay vai.
+voteEl["vote-target"].addEventListener("change", renderVoting);
+voteEl["vote-form"].addEventListener("submit", event => {
+  event.preventDefault();
+  const targetId = voteEl["vote-target"].value;
+  if (!canChooseTarget() || !targetId) return;
+  sendCommand(voting.canShoot ? "HunterChoice" : "Vote", {targetId});
+});
+voteEl["hunter-pass"].addEventListener("click", () => {
+  if (voting.canShoot) sendCommand("HunterChoice", {targetId: null});
 });
 
 socket = new WebSocket(WS_URL);

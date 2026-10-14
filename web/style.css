@@ -10,6 +10,14 @@
   --border: rgba(205, 185, 255, 0.22);
 }
 
+/* T06: Dùng lại màu và thẻ của nhóm; kết quả phiếu vẫn đọc rõ trên màn hình nhỏ. */
+.voting-card { margin-bottom: 24px; }
+.voting-card select { margin-bottom: 12px; }
+.voting-card button { margin: 0 8px 12px 0; }
+.voting-card ul { padding-left: 20px; overflow-wrap: anywhere; }
+.voting-card [role="status"] { margin-top: 16px; }
+.voting-card button:disabled { opacity: 0.55; cursor: not-allowed; }
+
 * {
   box-sizing: border-box;
 }

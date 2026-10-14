@@ -28,6 +28,7 @@ import Domain.Types
   , GameState(..)
   , Player(..)
   , PlayerId
+  , Phase(..)
   )
 import qualified Network.WebSockets as WS
 import Protocol.Json (decodeClientMessage, encodeServerMessage)
@@ -43,6 +44,7 @@ import Server.Broadcast
   , lobbyReply
   , lobbySnapshot
   , nightMessagesFor
+  , votingSnapshot
   )
 import Server.GameLoop (CreateRoomError(..), createRoomWithHost)
 import Server.Room
@@ -173,6 +175,11 @@ beginSession room actor sessionRef outbound = do
           nightMessagesFor (roomId room) actor safeEvents
 
     forM_ nightMessages (sendToClient outbound)
+
+    -- Snapshot sau event giữ UI đồng bộ theo state đã commit; Lobby giữ contract cũ.
+    if gamePhase (updateState update) /= Lobby
+      then sendToClient outbound (votingSnapshot (roomId room) actor (updateState update))
+      else pure ()
 
   writeIORef sessionRef (Just (room, broadcastThread))
 
@@ -352,6 +359,43 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
                 Right _ ->
                   -- Ack duoc gui qua DomainEvent, tranh gui trung.
                   pure ()
+
+    -- T06: Browser chi gui targetId; actor duoc gan tu session hien tai.
+    -- ActionAccepted xác nhận đúng request; VoteUpdated là receipt riêng của voter.
+    ClientVote requestId rid targetId -> do
+      handleVotingCommand requestId rid (Vote actor targetId)
+
+    -- Lựa chọn từ client được chuyển thành lệnh Domain sau khi gắn actor của phiên.
+    ClientHunterChoice requestId rid targetId ->
+      handleVotingCommand requestId rid (ResolveHunter actor targetId)
+  where
+    handleVotingCommand requestId rid command = do
+      current <- readIORef sessionRef
+
+      case current of
+        Nothing ->
+          reject outbound requestId "NOT_JOINED"
+            "Ban chua tham gia phong."
+
+        Just (room, _)
+          | rid /= roomId room ->
+              reject outbound requestId "WRONG_ROOM"
+                "Ban khong o trong phong nay."
+
+          | otherwise -> do
+              result <- submitCommand room requestId actor command
+
+              case result of
+                Left err ->
+                  sendToClient outbound
+                    (MsgRejected
+                      (Just requestId)
+                      (show err)
+                      ("Yêu cầu bị từ chối: " ++ show err))
+
+                Right _ ->
+                  -- Receipt theo requestId để UI chỉ kết thúc đúng yêu cầu đang chờ.
+                  sendToClient outbound (MsgActionAccepted requestId rid)
 
 webSocketApp
   :: RoomRegistry

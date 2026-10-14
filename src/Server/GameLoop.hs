@@ -3,6 +3,8 @@
 module Server.GameLoop
   ( processNextLobbyCommand
   , runLobbyLoop
+  , runGameLoopWithTimeouts
+  , applyInternalCommand
   , CreateRoomError(..)
   , createRoomWithHost
   ) where
@@ -10,7 +12,7 @@ module Server.GameLoop
 import Control.Concurrent.MVar (modifyMVar)
 
 import Control.Concurrent.STM
-  ( atomically
+  ( STM, atomically, check, orElse, registerDelay
   , newEmptyTMVarIO
   , putTMVar
   , readTBQueue
@@ -25,8 +27,7 @@ import Control.Concurrent.STM
 import Data.Char (isSpace)
 
 import Domain.Engine
-  ( applyLobbyCommand
-  , applyNightCommand
+  ( applyCommand
   )
 
 import Domain.Types
@@ -35,6 +36,7 @@ import Domain.Types
   , GameError(..)
   , GameState(..)
   , PlayerId
+  , Phase(..)
   )
 
 import Protocol.Types (RequestId, RoomId)
@@ -69,13 +71,25 @@ actorMatches request =
     NightAction pid _ ->
       pid == queuedActorId request
 
+    -- T06: Vote cung phai dung PlayerId cua session, khong tin ID tu client.
+    Vote pid _ ->
+      pid == queuedActorId request
+
+    -- Chỉ Handler đã xác thực mới tạo lệnh Hunter; Domain kiểm quyền pending.
+    ResolveHunter pid _ -> pid == queuedActorId request
+
+    -- Chat thuộc người chơi; ResolveVoting vẫn chỉ do bộ đếm giờ nội bộ gọi.
+    -- HunterChoice được Handler đổi thành ResolveHunter với ID của session.
+    Chat pid _ ->
+      pid == queuedActorId request
+
     -- Khong cho phep client tu goi lenh noi bo.
     _ ->
       False
 
 
 
--- T05: Dispatcher Lobby va NightAction
+-- T05/T06: Dispatcher command public vao Pure Engine.
 
 -- Chon Pure Engine theo loai command.
 -- Khong cho client tu goi ResolveNight, StartGame,
@@ -86,23 +100,16 @@ dispatchPlayerCommand
   -> Either GameError (GameState, [DomainEvent])
 dispatchPlayerCommand state command =
   case command of
-    -- T05: Xu ly hanh dong ban dem.
-    NightAction _ _ ->
-      applyNightCommand state command
-
-    -- Giu nguyen xu ly Lobby.
-    Join _ _ ->
-      applyLobbyCommand state command
-
-    Leave _ ->
-      applyLobbyCommand state command
-
-    SetReady _ _ ->
-      applyLobbyCommand state command
-
-    -- Lenh khong thuoc dispatcher nay bi tu choi.
-    _ ->
-      Left NotAuthorized
+    -- Chi cho dispatcher public nhan cac command nguoi choi duoc gui.
+    Join _ _ -> applyCommand state command
+    Leave _ -> applyCommand state command
+    SetReady _ _ -> applyCommand state command
+    NightAction _ _ -> applyCommand state command
+    Vote _ _ -> applyCommand state command
+    ResolveHunter _ _ -> applyCommand state command
+    Chat _ _ -> applyCommand state command
+    -- Start/Resolve la luong noi bo, khong nhan truc tiep tu Browser.
+    _ -> Left NotAuthorized
 
 
 
@@ -111,12 +118,23 @@ dispatchPlayerCommand state command =
 -- Xu ly dung mot lenh; ham se cho neu hang doi dang rong.
 -- Cap nhat state, version va event trong cung mot giao dich STM.
 processNextLobbyCommand :: RoomRuntime -> IO ()
-processNextLobbyCommand room = atomically $ do
+processNextLobbyCommand room = atomically (processPlayerCommand room)
+
+-- T06: Dùng chung giao dịch cho worker và kiểm thử một lệnh.
+processPlayerCommand :: RoomRuntime -> STM ()
+processPlayerCommand room = do
   request <- readTBQueue (roomCommands room)
   currentState <- readTVar (roomState room)
+  accepted <- readTVar (roomAcceptedRequests room)
 
-  let result =
-        if actorMatches request
+  let key = (queuedActorId request, queuedRequestId request)
+      tracked = case queuedCommand request of
+        Vote _ _ -> True
+        ResolveHunter _ _ -> True
+        _ -> False
+      result =
+        if tracked && key `elem` accepted then Left DuplicateRequest
+        else if actorMatches request
           then dispatchPlayerCommand currentState (queuedCommand request)
           else Left NotAuthorized
 
@@ -127,6 +145,7 @@ processNextLobbyCommand room = atomically $ do
       putTMVar (queuedReply request) (Left err)
 
     Right (nextState, events) -> do
+      if tracked then writeTVar (roomAcceptedRequests room) (key : accepted) else pure ()
       currentVersion <- readTVar (roomVersion room)
       let nextVersion = currentVersion + 1
 
@@ -155,14 +174,66 @@ processNextLobbyCommand room = atomically $ do
 -- Worker dung khi nguoi cuoi cung roi phong.
 -- Giu nguyen ten ham de khong anh huong code Server hien tai.
 runLobbyLoop :: RoomRuntime -> IO ()
-runLobbyLoop room = do
-  processNextLobbyCommand room
+runLobbyLoop = runGameLoopWithTimeouts 60000000 30000000
 
-  state <- readTVarIO (roomState room)
+-- T06: Điểm nối cho bộ điều phối T04/T05. Không được gọi từ JSON client.
+-- Cập nhật phase và phát sự kiện trong cùng STM với queue người chơi.
+applyInternalCommand :: RoomRuntime -> Command -> STM (Either GameError GameState)
+applyInternalCommand room command = do
+  state <- readTVar (roomState room)
+  case applyCommand state command of
+    Left err -> pure (Left err)
+    Right (nextState, events) -> do
+      version <- readTVar (roomVersion room)
+      writeTVar (roomState room) nextState
+      writeTVar (roomVersion room) (version + 1)
+      writeTChan (roomUpdates room) (RoomUpdate (version + 1) nextState events)
+      pure (Right nextState)
 
-  if null (gamePlayers state)
-    then pure ()
-    else runLobbyLoop room
+-- Khóa cửa sổ bằng phase/vòng/Hunter: phiếu mới không gia hạn timer.
+votingWindow :: GameState -> Maybe (Phase, Int, Maybe PlayerId)
+votingWindow state
+  | gamePhase state `elem` [Night, Voting], Just hunter <- gamePendingHunter state =
+      Just (gamePhase state, gameDay state, Just hunter)
+  | gamePhase state == Voting && not (gameVotingResolved state) =
+      Just (Voting, gameDay state, Nothing)
+  | otherwise = Nothing
+
+-- Thời gian tính bằng microsecond, truyền vào để test nhanh mà không đổi luật.
+-- Timer và Vote tranh chấp trên cùng TVar: sau khi chốt, phiếu đến muộn bị từ chối.
+runGameLoopWithTimeouts :: Int -> Int -> RoomRuntime -> IO ()
+runGameLoopWithTimeouts voteMicros hunterMicros room = startWindow
+  where
+    startWindow = do
+      state <- readTVarIO (roomState room)
+      let window = votingWindow state
+          duration = case window of
+            Just (_, _, Just _) -> hunterMicros
+            _ -> voteMicros
+      timer <- registerDelay (max 1 duration)
+      let loop = do
+            restart <- atomically $
+              (do current <- readTVar (roomState room)
+                  check (votingWindow current /= window || null (gamePlayers current))
+                  pure True)
+              `orElse`
+              (do check (window /= Nothing)
+                  expired <- readTVar timer
+                  check expired
+                  let command = case window of
+                        Just (_, _, Just hunter) -> ResolveHunter hunter Nothing
+                        _ -> ResolveVoting
+                  result <- applyInternalCommand room command
+                  case result of
+                    Left err -> error ("T06: trạng thái timer không hợp lệ: " ++ show err)
+                    Right _ -> pure True)
+              `orElse`
+              (processPlayerCommand room >> pure False)
+            if restart then do
+              current <- readTVarIO (roomState room)
+              if null (gamePlayers current) then pure () else startWindow
+            else loop
+      loop
 
 
 

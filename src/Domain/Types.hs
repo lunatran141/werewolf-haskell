@@ -88,6 +88,8 @@ data GameError
   | InvalidRoleConfiguration | InvalidGameState
   | AbilityAlreadyUsed | HunterNotPending | InvalidTiePolicy
   | DuplicateNightAction | EmptyChat | NotReady
+  -- T06: Một request đã thành công không được phát lại ở vòng sau.
+  | DuplicateRequest
   deriving (Eq, Show, Read)
 
 data EventVisibility = Public | Private PlayerId
@@ -110,6 +112,8 @@ data DomainEvent
   | WitchVictimNotice PlayerId (Maybe PlayerId)
   | NightResolved [PlayerId]
   | VoteUpdated PlayerId PlayerId
+  -- Chỉ công bố tổng phiếu theo mục tiêu khi đã khóa Voting.
+  | VotingResolved [(PlayerId, Int)] (Maybe PlayerId)
   | PlayerEliminated PlayerId
   | PlayerRoleRevealed PlayerId Role Team
   | HunterShotPending PlayerId
