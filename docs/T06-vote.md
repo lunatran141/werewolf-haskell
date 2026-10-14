@@ -4,7 +4,7 @@
 
 T06 xử lý từ lúc phòng vào Voting đến khi chốt phiếu, xử lý Hunter, reveal người chết và chuyển Night/GameOver. Hunter chết ở Night cũng được xử lý trước khi T05 hoàn tất sang Day. Không thay đổi preset 8/9 người, luật Night hay cách tăng vòng của T04.
 
-Repo hiện chưa có luồng StartGame/điều phối toàn ván trên UI. Bộ điều phối T04/T05 cần gọi `atomically (applyInternalCommand room AdvancePhase)` khi hết Day; phòng phải đang có trạng thái Day hợp lệ. Đây là hàm Haskell nội bộ, không phải thông điệp được Browser quyền gửi. Không ghi thẳng TVar khi tích hợp vì sẽ bỏ qua event/version.
+Bản ghép đã giữ StartGame, phân vai riêng tư và điều phối Night của T05 trên `develop` tại commit `73513ba`. Bộ điều phối chung vẫn cần gọi `atomically (applyInternalCommand room AdvancePhase)` khi hết Day; phòng phải đang có trạng thái Day hợp lệ. Đây là hàm Haskell nội bộ, không phải thông điệp được Browser quyền gửi. Không ghi thẳng TVar khi tích hợp vì sẽ bỏ qua event/version. Chưa thêm timer Day/Night ngoài phạm vi sửa conflict.
 
 Worker hiện có `runLobbyLoop` dùng chung queue và tự mở timer khi nhận thấy Voting. Mặc định Voting 60 giây, Hunter 30 giây; test truyền thời hạn ngắn qua `runGameLoopWithTimeouts`. Gửi phiếu không kéo dài timer. Hết hạn thì chốt dù chưa đủ phiếu; người chưa chọn được tính là bỏ qua, không tạo phiếu giả. Không thêm timer Day/Night hoặc nút Start thuộc phần khác.
 
@@ -35,7 +35,7 @@ Chỉ Hunter đang pending được chọn bắn/bỏ qua dù đã chết. Hết
 | `werewolf-server.cabal` | Khai báo bộ test; `-threaded` cho test dùng timer STM |
 | `test/DomainT06Spec.hs`, `test/T06Main.hs` | Kiểm thử luật, invariant, Hunter Night/Voting, ván 8/9 |
 | `test/T06ProtocolSpec.hs`, `test/T06GameLoopSpec.hs` | JSON, quyền nhận event, session, commit và duplicate |
-| `test/T06WebSocketSpec.hs` | Hai kết nối thật, timer thật, invalid/duplicate/tie/lynch/Hunter |
+| `test/T06WebSocketSpec.hs` | Kết nối thật, timer, invalid/duplicate/tie/lynch/Hunter; thêm kịch bản 8 client Start → Night → Hunter → Day → Voting |
 | `test/T06UiSpec.cjs` | Chạy app.js thật với DOM giả tối thiểu, không cần thư viện Node ngoài |
 
 Các khối xử lý mới có comment tiếng Việt. Không diễn giải thành đã đối chiếu đầy đủ 5 sheet online: bản triển khai dựa trên đầu ra T06 đã xác nhận và contract/luật có trong repo.
@@ -44,18 +44,18 @@ Các khối xử lý mới có comment tiếng Việt. Không diễn giải thà
 
 ```json
 {"type":"Vote","requestId":"v1","roomId":"R","targetId":"p2"}
-{"type":"HunterChoice","requestId":"h1","roomId":"R","targetId":"p2"}
-{"type":"HunterChoice","requestId":"h2","roomId":"R","targetId":null}
+{"type":"HunterAction","requestId":"h1","roomId":"R","choice":{"action":"HunterShot","targetId":"p2"}}
+{"type":"HunterAction","requestId":"h2","roomId":"R","choice":{"action":"HunterPass"}}
 ```
 
-`targetId: null` là Hunter bỏ qua; thiếu targetId bị từ chối. Client không quyết định actor, role, kết quả hay phase.
+Sau merge, dùng duy nhất `HunterAction` theo contract T05: `HunterPass` là bỏ qua; `HunterShot` bắt buộc có targetId. Giao thức thử nghiệm `HunterChoice` trước đó không còn được sử dụng. Client không quyết định actor, role, kết quả hay phase.
 
 - `ActionAccepted`: `requestId`, `roomId`; chỉ xác nhận request tương ứng.
 - `CommandRejected`: giữ contract lỗi hiện có, gồm requestId/code/message.
 - `VoteUpdated`: receipt riêng, không lộ mục tiêu của voter cho người khác.
 - `VotingResolved`: roomId, tally dạng `[["p2",2]]`, targetId hoặc null. Tally chỉ công khai sau khóa phiếu.
 - `VotingSnapshot`: roomId, phase, day, players (playerId/displayName/alive), hasVoted của chính người nhận, canShoot của chính người nhận, resolved, result. Không có role người sống hoặc danh sách phiếu cá nhân. Người chết đang chờ batch reveal vẫn được che trạng thái cho tới khi hoàn tất Hunter.
-- `PlayerRoleRevealed`, `PhaseChanged`, `GameFinished`, `HunterShotPending/Resolved`: sử dụng contract sự kiện hiện có.
+- `PlayerRoleRevealed`, `PhaseChanged`, `GameFinished`, `HunterShotPending/Resolved`: giữ contract T05. `HunterShotResolved` có cả `hunterId` và `targetId` (null nếu bỏ qua). Handler không còn nhánh `HUNTER_ENGINE_NOT_READY`.
 
 Phiên bản commit vẫn nằm ở RoomUpdate nội bộ. Chưa bổ sung envelope gameVersion/sequence hay reconnect cùng định danh cho toàn protocol: đây là điểm tích hợp connection hardening chung, không được xem là đã hoàn thành bởi T06.
 
@@ -67,11 +67,11 @@ node --check web/app.js
 node --test test/T06UiSpec.cjs
 ```
 
-Các lệnh này chỉ dùng được khi dependency đã có. Không tự cài hay nâng GHC/Cabal. Kiểm thử socket mở localhost; sandbox có thể cần cấp quyền. Test T06 socket dùng cổng 18766, fixture dựng đủ 8 người qua luật T04/T05 rồi bước vào Voting; đó là dữ liệu test, không phải endpoint sửa state trong production.
+Các lệnh này chỉ dùng được khi dependency đã có. Không tự cài hay nâng GHC/Cabal. Kiểm thử socket mở localhost; sandbox có thể cần cấp quyền. Test T06 socket dùng cổng 18766. Các case tập trung Voting dùng fixture dựng 8 người; case tích hợp sau merge dùng 8 kết nối Join/Ready/StartGame thật, nhận vai và gửi NightAction thật. Chỉ bước Day → Voting được gọi bằng điểm nối nội bộ vì chưa có Day timer. Không có endpoint sửa state trong production.
 
-Trong phiên triển khai, các bộ Haskell được biên dịch trực tiếp bằng GHC với package database đã cài, không coi đây là bằng chứng `cabal test all` đã chạy thành công. UI test là kiểm thử hành vi với DOM giả, chưa phải kiểm tra trực quan bằng trình duyệt thật. Khi review UI trong ván thật, cần có bộ điều phối của nhóm đưa phòng vào Voting như mô tả trên.
+Ở lần triển khai ban đầu, các bộ Haskell được biên dịch trực tiếp bằng GHC. Kết quả đó được ghi lịch sử bên dưới; kết quả Cabal sau merge được ghi riêng. UI test là kiểm thử hành vi với DOM giả, chưa phải kiểm tra trực quan bằng trình duyệt thật. Khi review UI trong ván thật, cần có bộ điều phối của nhóm đưa phòng vào Voting như mô tả trên.
 
-Kết quả kiểm tra 14/10/2026:
+Kết quả trước khi ghép T05, ngày 14/10/2026 (không dùng thay kết quả sau merge):
 
 - T06: 24 Domain + 11 Protocol + 3 GameLoop + 6 WebSocket thật + 5 UI = 49 kiểm thử, không thất bại.
 - Hồi quy nhóm: 223 kiểm thử T02/T03/T04/T05/Protocol/GameLoop, không thất bại; skeleton smoke test cũng qua. Các property test hiện có chạy 100 mẫu/property.
@@ -81,4 +81,16 @@ Kết quả kiểm tra 14/10/2026:
 
 ## Trước khi tự push
 
-Review riêng các thay đổi T06; không dùng add-all nếu còn tài liệu nhóm đang đổi tên. Không commit build artifact. Thống nhất JSON mới và điểm gọi AdvancePhase với người phụ trách T04/Protocol. Các đổi tên/xóa tài liệu có sẵn trong working tree không thuộc thay đổi T06 này.
+Review riêng các thay đổi T06 và kết quả merge; không dùng add-all nếu còn file ngoài phạm vi. Không commit build artifact. Tác giả tự commit/push để PR #17 cập nhật; chưa commit merge thì branch trên GitHub chưa nhận việc giải quyết conflict.
+
+Ba đổi tên tài liệu đã nằm trong commit T06 trước khi sửa conflict được giữ nguyên; các liên kết README/T02 tới tên cũ được cập nhật. Không phải file của nhóm bị bỏ sót. `develop` local đã được pull fast-forward và kiểm tra khớp origin trước khi ghép. Giữ `docs/T05-night-actions.md` và thay đổi test quyền nhận YourRole từ develop.
+
+## Kết quả sau khi ghép develop — 14/10/2026
+
+- `cabal build all --offline`: PASS với GHC 9.6.6/Cabal 3.16.1.0 đang có trên máy; không cài hoặc đổi toolchain. CI của nhóm dùng Cabal 3.10, cần đợi kết quả riêng trên GitHub.
+- `cabal test all --offline --test-show-details=direct`: 13/13 test suites PASS.
+- T06: 24 Domain + 12 Protocol + 3 GameLoop + 7 WebSocket + 7 UI = 53 kiểm thử PASS.
+- Kịch bản tích hợp 8 client đi qua StartGame/Night tự điều phối của T05, HunterAction T06, Day, điểm nối Voting, tally/lynch và Night tiếp theo.
+- `node --check web/app.js`, `node --test test/T06UiSpec.cjs`: PASS. Test UI kiểm tra ID HTML duy nhất và giữ Start/Night sau khi ghép.
+- Docker không khả dụng trong PATH local nên chưa chạy `docker compose config` hoặc build container; không đánh dấu Docker PASS.
+- Còn log ngoại lệ khi client test đóng socket nhanh; test vẫn exit 0. Chưa mở rộng sửa connection hardening ngoài phạm vi merge này.

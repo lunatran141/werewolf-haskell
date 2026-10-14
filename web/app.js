@@ -1,5 +1,4 @@
 const WS_URL = "ws://localhost:8080/ws";
-
 let socket = null;
 let requestNumber = 0;
 
@@ -10,7 +9,18 @@ const state = {
   hostPlayerId: null,
   players: [],
   pending: null,
-  error: ""
+  error: "",
+  phase: "Lobby",
+  selfRole: null,
+  nightActionDone: false,
+  nightMessage: "",
+  seerResult: null,
+  witchVictimId: null,
+  revealedRoles: {},
+  gameResult: null,
+  hunterPending: false,
+  hunterActionDone: false,
+  hunterMessage: ""
 };
 
 // T06: Chỉ lưu dữ liệu server cho phép xem; không chứa vai của người còn sống.
@@ -36,13 +46,62 @@ const el = {
   readyCount: document.querySelector("#ready-count"),
   selfStatus: document.querySelector("#self-status"),
   readyButton: document.querySelector("#ready-button"),
-  leaveButton: document.querySelector("#leave-button")
+  leaveButton: document.querySelector("#leave-button"),
+  startButton: document.querySelector("#start-button"),
+  nightSection: document.querySelector("#night-section"),
+  nightPhase: document.querySelector("#night-phase"),
+  nightRoleName: document.querySelector("#night-role-name"),
+  nightRoleDescription: document.querySelector("#night-role-description"),
+  nightStatus: document.querySelector("#night-status"),
+  wolfPanel: document.querySelector("#wolf-action-panel"),
+  wolfTarget: document.querySelector("#wolf-target"),
+  wolfSubmit: document.querySelector("#wolf-submit"),
+  seerPanel: document.querySelector("#seer-action-panel"),
+  seerTarget: document.querySelector("#seer-target"),
+  seerSubmit: document.querySelector("#seer-submit"),
+  seerResultPanel: document.querySelector("#seer-result-panel"),
+  seerResultText: document.querySelector("#seer-result-text"),
+  guardPanel: document.querySelector("#guard-action-panel"),
+  guardTarget: document.querySelector("#guard-target"),
+  guardSubmit: document.querySelector("#guard-submit"),
+  witchPanel: document.querySelector("#witch-action-panel"),
+  witchVictimPanel: document.querySelector("#witch-victim-panel"),
+  witchVictimText: document.querySelector("#witch-victim-text"),
+  witchHeal: document.querySelector("#witch-heal"),
+  witchTarget: document.querySelector("#witch-target"),
+  witchPoison: document.querySelector("#witch-poison"),
+  witchPass: document.querySelector("#witch-pass"),
+  hunterPanel: document.querySelector("#hunter-action-panel"),
+  hunterPendingPanel: document.querySelector("#hunter-pending-panel"),
+  hunterTarget: document.querySelector("#hunter-target"),
+  hunterShoot: document.querySelector("#hunter-shoot"),
+  hunterPass: document.querySelector("#hunter-pass"),
+  hunterStatus: document.querySelector("#hunter-status"),
+  nightWaitingPanel: document.querySelector("#night-waiting-panel")
+};
+
+const roleNames = {
+  Werewolf: "Sói",
+  Seer: "Tiên Tri",
+  Guard: "Bảo Vệ",
+  Witch: "Phù Thủy",
+  Villager: "Dân Làng",
+  Hunter: "Thợ Săn"
+};
+
+const roleDescriptions = {
+  Werewolf: "Chọn mục tiêu để tấn công trong đêm.",
+  Seer: "Chọn người chơi để kiểm tra phe.",
+  Guard: "Chọn người chơi để bảo vệ.",
+  Witch: "Cứu nạn nhân, dùng thuốc độc hoặc bỏ lượt.",
+  Villager: "Bạn không có hành động đặc biệt trong đêm.",
+  Hunter: "Nếu bị loại, bạn có thể bắn một người hoặc bỏ lượt khi Server cấp quyền."
 };
 
 // Các phần tử mới độc lập với bố cục phòng chờ đã có của nhóm.
 const voteEl = Object.fromEntries([
   "voting-section", "voting-title", "voting-status", "vote-form",
-  "vote-target", "vote-button", "hunter-pass", "vote-result", "vote-tally", "vote-reveals"
+  "vote-target", "vote-button", "vote-result", "vote-tally", "vote-reveals"
 ].map(id => [id, document.getElementById(id)]));
 
 function playerLabel(pid) {
@@ -52,8 +111,8 @@ function playerLabel(pid) {
 // UI chỉ mở thao tác theo snapshot; server vẫn xác thực lại mọi lệnh.
 function canChooseTarget() {
   const me = voting.players.find(p => p.playerId === state.selfPlayerId);
-  return voting.canShoot || (voting.phase === "Voting" && !voting.resolved &&
-    !voting.hasVoted && me?.alive === true);
+  return state.phase === "Voting" && !voting.resolved &&
+    !voting.hasVoted && me?.alive === true && !state.hunterPending;
 }
 
 function renderVoting() {
@@ -61,7 +120,11 @@ function renderVoting() {
   voteEl["voting-section"].hidden = !active;
   el.readyButton.hidden = active;
   el.leaveButton.disabled = active || !state.connected || state.pending !== null;
-  if (!active) return;
+  if (!active) {
+    voteEl["vote-target"].disabled = true;
+    voteEl["vote-button"].disabled = true;
+    return;
+  }
 
   const phaseNames = {Night: "Ban đêm", Day: "Thảo luận", Voting: "Bỏ phiếu", GameOver: "Kết thúc"};
   voteEl["voting-title"].textContent = `${phaseNames[voting.phase] || voting.phase} · Vòng ${voting.day}`;
@@ -87,9 +150,7 @@ function renderVoting() {
   }
   target.disabled = !allowed;
   voteEl["vote-button"].disabled = !allowed || !target.value;
-  voteEl["vote-button"].textContent = voting.canShoot ? "Bắn mục tiêu" : "Gửi phiếu";
-  voteEl["hunter-pass"].hidden = !voting.canShoot;
-  voteEl["hunter-pass"].disabled = !allowed;
+  voteEl["vote-button"].textContent = "Gửi phiếu";
 
   const status = !state.connected ? "Mất kết nối. Không thể gửi lựa chọn."
     : state.pending ? "Đang chờ server xác nhận…"
@@ -120,22 +181,70 @@ function normalizePlayerName(name) {
   return name.trim().replace(/\s+/gu, " ");
 }
 
-function render() {
-  el.status.textContent = state.connected
-    ? "Đã kết nối Server"
-    : "Mất kết nối Server";
+function getSelfPlayer() {
+  return state.players.find(
+    player => player.playerId === state.selfPlayerId
+  );
+}
 
-  el.status.dataset.mode = state.connected ? "online" : "offline";
-  el.message.textContent = state.error;
+function getPlayerName(playerId) {
+  const player = state.players.find(
+    item => item.playerId === playerId
+  );
 
-  el.joinSection.hidden = state.selfPlayerId !== null;
-  el.lobbySection.hidden = state.selfPlayerId === null;
+  return player?.displayName || playerId || "Không có";
+}
 
+function resetNightState() {
+  state.phase = "Lobby";
+  state.selfRole = null;
+  state.nightActionDone = false;
+  state.nightMessage = "";
+  state.seerResult = null;
+  state.witchVictimId = null;
+  state.revealedRoles = {};
+  state.gameResult = null;
+  state.hunterPending = false;
+  state.hunterActionDone = false;
+  state.hunterMessage = "";
+}
+
+function resetRoomState() {
+  state.roomId = null;
+  state.selfPlayerId = null;
+  state.hostPlayerId = null;
+  state.players = [];
+  state.pending = null;
+  resetNightState();
+  Object.assign(voting, {phase: "Lobby", day: 0, players: [], hasVoted: false,
+    canShoot: false, resolved: false, result: null, tally: [], summary: "", reveals: []});
+}
+
+function canStartGame() {
+  const playerCount = state.players.length;
+
+  return (
+    state.connected &&
+    state.selfPlayerId !== null &&
+    state.selfPlayerId === state.hostPlayerId &&
+    state.phase === "Lobby" &&
+    state.pending === null &&
+    (playerCount === 8 || playerCount === 9) &&
+    state.players.every(player => player.ready)
+  );
+}
+
+function renderLobby() {
+  const inRoom = state.selfPlayerId !== null;
+  const inLobby = state.phase === "Lobby";
   const busy = state.pending !== null;
+
+  el.joinSection.hidden = inRoom;
+  el.lobbySection.hidden = !inRoom || !inLobby;
 
   el.joinButton.disabled = !state.connected || busy;
   el.createButton.disabled = !state.connected || busy;
-  el.readyButton.disabled = !state.connected || busy;
+  el.readyButton.disabled = !state.connected || busy || !inLobby;
   el.leaveButton.disabled = !state.connected || busy;
 
   el.joinButton.textContent =
@@ -151,7 +260,10 @@ function render() {
   el.roomTitle.textContent = `Phòng ${state.roomId ?? ""}`;
   el.playerCount.textContent = `${state.players.length}/9 người`;
 
-  const readyCount = state.players.filter(player => player.ready).length;
+  const readyCount = state.players.filter(
+    player => player.ready
+  ).length;
+
   el.readyCount.textContent =
     `${readyCount}/${state.players.length} sẵn sàng`;
 
@@ -193,6 +305,7 @@ function render() {
     const ready = document.createElement("span");
     ready.className =
       `ready-badge${player.ready ? " is-ready" : ""}`;
+
     ready.textContent = player.ready
       ? "Sẵn sàng"
       : "Chưa sẵn sàng";
@@ -202,9 +315,7 @@ function render() {
     el.playerList.appendChild(item);
   }
 
-  const me = state.players.find(
-    player => player.playerId === state.selfPlayerId
-  );
+  const me = getSelfPlayer();
 
   el.readyButton.textContent = me?.ready
     ? "Hủy sẵn sàng"
@@ -215,11 +326,201 @@ function render() {
       ? "Bạn đã sẵn sàng. Hãy chờ những người chơi khác."
       : "Bạn chưa sẵn sàng. Nhấn nút khi đã chuẩn bị xong."
     : "";
+
+  const isHost =
+    inRoom &&
+    state.selfPlayerId === state.hostPlayerId;
+
+  el.startButton.hidden = !isHost || !inLobby;
+  el.startButton.disabled = !canStartGame();
+
+  el.startButton.textContent =
+    state.pending?.type === "StartGame"
+      ? "Đang bắt đầu ván..."
+      : "Bắt đầu ván";
+}
+
+function setTargetOptions(select, players) {
+  const selectedValue = select.value;
+
+  select.replaceChildren();
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = "-- Chọn người chơi --";
+  select.appendChild(placeholder);
+
+  for (const player of players) {
+    const option = document.createElement("option");
+    option.value = player.playerId;
+    option.textContent = player.displayName || player.playerId;
+    select.appendChild(option);
+  }
+
+  if (players.some(player => player.playerId === selectedValue)) {
+    select.value = selectedValue;
+  }
+}
+
+function renderNightTargets() {
+  // Snapshot chỉ bổ sung trạng thái sống công khai, không bổ sung vai của người khác.
+  const alivePlayers = state.players.filter(player => player.alive !== false);
+  const otherPlayers = alivePlayers.filter(player => player.playerId !== state.selfPlayerId);
+
+  // PlayerView chua co alive va team.
+  // UI chi loc muc tieu theo thong tin duoc phep biet.
+  // Server van phai validate moi NightAction.
+  setTargetOptions(el.wolfTarget, otherPlayers);
+  setTargetOptions(el.seerTarget, otherPlayers);
+  setTargetOptions(el.guardTarget, alivePlayers);
+  setTargetOptions(el.witchTarget, otherPlayers);
+
+  // PlayerView chua co lifeStatus; Server phai validate Hunter target.
+  // Loai cac Player da duoc cong bo chet.
+  setTargetOptions(el.hunterTarget, otherPlayers.filter(
+    player => !Object.prototype.hasOwnProperty.call(
+      state.revealedRoles, player.playerId
+    )
+  ));
+}
+
+function renderNight() {
+  const inRoom = state.selfPlayerId !== null;
+  const isNight = state.phase === "Night";
+
+  el.nightSection.hidden = !inRoom || !isNight;
+
+  if (!inRoom || !isNight) {
+    return;
+  }
+
+  const role = state.selfRole;
+
+  el.nightPhase.textContent = state.phase;
+
+  el.nightRoleName.textContent = role
+    ? roleNames[role] || role
+    : "Đang chờ Server xác nhận vai trò";
+
+  el.nightRoleDescription.textContent = role
+    ? roleDescriptions[role] || "Chờ hướng dẫn từ Server."
+    : "Server chưa gửi thông tin vai trò riêng tư.";
+
+  const canAct =
+    state.connected &&
+    state.pending === null &&
+    role !== null &&
+    !state.nightActionDone && getSelfPlayer()?.alive !== false && !state.hunterPending;
+
+  el.wolfPanel.hidden = role !== "Werewolf";
+  el.seerPanel.hidden = role !== "Seer";
+  el.guardPanel.hidden = role !== "Guard";
+  el.witchPanel.hidden = role !== "Witch";
+
+  el.nightWaitingPanel.hidden =
+    role === "Werewolf" ||
+    role === "Seer" ||
+    role === "Guard" ||
+    role === "Witch" ||
+    role === "Hunter";
+
+  renderNightTargets();
+
+  el.wolfTarget.disabled = !canAct;
+  el.seerTarget.disabled = !canAct;
+  el.guardTarget.disabled = !canAct;
+  el.witchTarget.disabled = !canAct;
+
+  el.wolfSubmit.disabled =
+    !canAct || !el.wolfTarget.value;
+
+  el.seerSubmit.disabled =
+    !canAct || !el.seerTarget.value;
+
+  el.guardSubmit.disabled =
+    !canAct || !el.guardTarget.value;
+
+  el.witchHeal.disabled =
+    !canAct || state.witchVictimId === null;
+
+  el.witchPoison.disabled =
+    !canAct || !el.witchTarget.value;
+
+  el.witchPass.disabled = !canAct;
+
+  if (state.nightMessage) {
+    el.nightStatus.textContent = state.nightMessage;
+  } else if (state.nightActionDone) {
+    el.nightStatus.textContent =
+      "Hành động đã được Server xác nhận.";
+  } else if (!role) {
+    el.nightStatus.textContent =
+      "Đang chờ thông tin vai trò từ Server.";
+  } else {
+    el.nightStatus.textContent =
+      "Hãy chọn hành động phù hợp với vai trò.";
+  }
+
+  el.seerResultPanel.hidden = state.seerResult === null;
+
+  if (state.seerResult !== null) {
+    const teamName =
+      state.seerResult === "Wolves" ? "Sói" : "Dân Làng";
+
+    el.seerResultText.textContent =
+      `Kết quả soi: phe ${teamName}.`;
+  }
+
+  el.witchVictimPanel.hidden =
+    state.witchVictimId === null;
+
+  if (state.witchVictimId !== null) {
+    el.witchVictimText.textContent =
+      `Nạn nhân được Sói chọn: ${
+        getPlayerName(state.witchVictimId)
+      }.`;
+  }
+}
+
+// T06: Một bảng Hunter dùng chung cho Night và Voting, không phụ thuộc panel Night.
+function renderHunter() {
+  const active = state.selfPlayerId !== null && state.selfRole === "Hunter" &&
+    (state.phase === "Night" || state.hunterPending);
+  el.hunterPanel.hidden = !active;
+  const allowed = active && state.connected && state.pending === null &&
+    state.hunterPending && !state.hunterActionDone && ["Night", "Voting"].includes(state.phase);
+  setTargetOptions(el.hunterTarget, state.players.filter(p =>
+    p.playerId !== state.selfPlayerId && p.alive !== false && !state.revealedRoles[p.playerId]));
+  el.hunterPendingPanel.hidden = !state.hunterPending;
+  el.hunterTarget.disabled = !allowed;
+  el.hunterShoot.disabled = !allowed || !el.hunterTarget.value;
+  el.hunterPass.disabled = !allowed;
+  el.hunterStatus.textContent = !state.connected ? "Mất kết nối. Không thể gửi lựa chọn."
+    : state.hunterMessage || (state.hunterPending
+      ? "Bạn có thể bắn hoặc bỏ lượt; hết hạn sẽ tự bỏ qua."
+      : "Đang chờ thông báo từ Server.");
+}
+
+function render() {
+  el.status.textContent = state.connected
+    ? "Đã kết nối Server"
+    : "Mất kết nối Server";
+
+  el.status.dataset.mode =
+    state.connected ? "online" : "offline";
+
+  el.message.textContent = state.error;
+
+  renderLobby();
+  renderNight();
   renderVoting();
+  renderHunter();
 }
 
 function sendCommand(type, fields = {}) {
-  if (state.pending !== null) return;
+  if (state.pending !== null) {
+    return;
+  }
 
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     state.error = "Chưa kết nối được Server.";
@@ -236,10 +537,7 @@ function sendCommand(type, fields = {}) {
     ...fields
   };
 
-  state.pending = {
-    type,
-    requestId
-  };
+  state.pending = { type, requestId };
   state.error = "";
   render();
 
@@ -249,6 +547,86 @@ function sendCommand(type, fields = {}) {
     state.pending = null;
     state.error = "Không gửi được yêu cầu. Hãy kiểm tra kết nối.";
     render();
+  }
+}
+
+function sendNightAction(choice) {
+  if (
+    state.phase !== "Night" ||
+    state.selfRole === null ||
+    state.selfPlayerId === null ||
+    state.nightActionDone || getSelfPlayer()?.alive === false || state.hunterPending
+  ) {
+    state.error = "Bạn chưa được phép hành động trong đêm.";
+    render();
+    return;
+  }
+
+  sendCommand("NightAction", { choice });
+}
+
+function handleNightAccepted() {
+  if (state.pending?.type === "NightAction") {
+    state.pending = null;
+  }
+
+  state.nightActionDone = true;
+  state.nightMessage = "Server đã chấp nhận hành động.";
+}
+
+function sendHunterAction(choice) {
+  if (
+    !["Night", "Voting"].includes(state.phase) ||
+    state.selfRole !== "Hunter" ||
+    !state.hunterPending ||
+    state.hunterActionDone ||
+    state.selfPlayerId === null
+  ) {
+    state.error = "Hunter chưa được Server cấp quyền bắn.";
+    render();
+    return;
+  }
+
+  sendCommand("HunterAction", { choice });
+}
+
+function handlePhaseChanged(phase) {
+  const previousPhase = state.phase;
+
+  // Đồng bộ một phase cho cả T05 và T06; xóa kết quả cũ khi bắt đầu Voting mới.
+  if (phase === "Voting" && voting.phase !== "Voting") {
+    voting.summary = "";
+    voting.tally = [];
+  }
+  state.phase = phase;
+  voting.phase = phase;
+
+  // PhaseChanged Night xac nhan StartGame da thanh cong.
+  if (
+    phase === "Night" &&
+    state.pending?.type === "StartGame"
+  ) {
+    state.pending = null;
+  }
+
+  if (phase === "Night" && previousPhase !== "Night") {
+    state.nightActionDone = false;
+    state.nightMessage = "";
+    state.seerResult = null;
+    state.witchVictimId = null;
+    state.hunterPending = false;
+    state.hunterActionDone = false;
+    state.hunterMessage = "";
+  }
+
+  if (phase !== "Night") {
+    state.nightActionDone = false;
+    state.nightMessage = "";
+    state.seerResult = null;
+    state.witchVictimId = null;
+    state.hunterPending = false;
+    state.hunterActionDone = false;
+    state.hunterMessage = "";
   }
 }
 
@@ -262,11 +640,17 @@ function handleServerMessage(message) {
         voting.summary = "";
         voting.tally = [];
       }
+      if (state.phase !== message.phase) handlePhaseChanged(message.phase);
       Object.assign(voting, {
         phase: message.phase, day: message.day, players: message.players,
         hasVoted: message.hasVoted, canShoot: message.canShoot,
         resolved: message.resolved, result: message.result
       });
+      state.hunterPending = message.canShoot;
+      if (message.canShoot) state.hunterActionDone = false;
+      state.players = message.players.map(player => ({
+        ...state.players.find(p => p.playerId === player.playerId), ...player
+      }));
       break;
 
     case "ActionAccepted":
@@ -282,18 +666,13 @@ function handleServerMessage(message) {
         : "Không có phiếu: không loại ai.";
       break;
 
-    case "PlayerRoleRevealed":
-      if (!voting.reveals.some(p => p.playerId === message.playerId)) voting.reveals.push(message);
-      break;
-
-    case "HunterShotResolved":
-      voting.canShoot = false;
-      break;
     case "LobbySnapshot":
       state.roomId = message.roomId;
       state.selfPlayerId = message.selfPlayerId;
       state.hostPlayerId = message.hostPlayerId;
-      state.players = message.players;
+      state.players = Array.isArray(message.players)
+        ? message.players
+        : [];
       state.pending = null;
       break;
 
@@ -318,13 +697,7 @@ function handleServerMessage(message) {
       }
 
       if (message.playerId === state.selfPlayerId) {
-        state.selfPlayerId = null;
-        state.hostPlayerId = null;
-        state.roomId = null;
-        state.players = [];
-        state.pending = null;
-        Object.assign(voting, {phase: "Lobby", players: [], hasVoted: false,
-          canShoot: false, resolved: false, result: null, tally: [], summary: "", reveals: [], day: 0});
+        resetRoomState();
       }
       break;
 
@@ -349,15 +722,141 @@ function handleServerMessage(message) {
       }
       break;
 
+    // Role bi mat chi duoc Server gui cho chu so huu.
+    case "YourRole":
+      if (message.roomId === state.roomId) {
+        state.selfRole = message.role;
+        state.nightMessage =
+          "Bạn đã nhận vai trò từ Server.";
+      }
+      break;
+
+    case "NightActionAccepted":
+      if (message.roomId === state.roomId) {
+        handleNightAccepted();
+      }
+      break;
+
+    case "SeerResult":
+      if (message.roomId === state.roomId) {
+        state.seerResult = message.team;
+        state.nightMessage = "Đã nhận kết quả soi riêng tư.";
+      }
+      break;
+
+    case "WitchVictimNotice":
+      if (message.roomId === state.roomId) {
+        state.witchVictimId = message.victimId;
+        state.nightMessage = message.victimId === null
+          ? "Sói không có nạn nhân để cứu."
+          : "Phù Thủy đã nhận thông báo nạn nhân.";
+      }
+      break;
+
+    case "HunterShotPending":
+      if (
+        message.roomId === state.roomId &&
+        state.selfRole === "Hunter"
+      ) {
+        state.hunterPending = true;
+        state.hunterActionDone = false;
+        state.hunterMessage =
+          "Đến lượt Hunter: chọn mục tiêu hoặc bỏ lượt.";
+        state.nightMessage =
+          "Hunter được quyền bắn sau khi bị loại.";
+      }
+      break;
+
+    case "HunterShotResolved":
+      if (message.roomId === state.roomId) {
+        voting.canShoot = false;
+        if (
+          state.selfRole === "Hunter" &&
+          message.hunterId === state.selfPlayerId
+        ) {
+          state.hunterPending = false;
+          state.hunterActionDone = true;
+          state.hunterMessage =
+            "Server đã xử lý lượt Hunter.";
+
+          if (state.pending?.type === "HunterAction") {
+            state.pending = null;
+          }
+        }
+      }
+      break;
+
+    case "NightResolved":
+      if (message.roomId === state.roomId) {
+        state.nightMessage = "Đêm đã được xử lý.";
+      }
+      break;
+
+    case "PlayerRoleRevealed":
+      if (message.roomId === state.roomId) {
+        if (!voting.reveals.some(p => p.playerId === message.playerId)) voting.reveals.push(message);
+        state.revealedRoles[message.playerId] = {
+          role: message.role,
+          team: message.team
+        };
+      }
+      break;
+
+    case "PhaseChanged":
+      if (message.roomId === state.roomId) {
+        handlePhaseChanged(message.phase);
+      }
+      break;
+
+    case "GameFinished":
+      if (message.roomId === state.roomId) {
+        state.phase = "GameOver";
+        state.gameResult = message.result;
+        state.pending = null;
+
+        const results = {
+          WinnerVillage: "Phe Dân Làng chiến thắng!",
+          WinnerWolves: "Phe Sói chiến thắng!",
+          Draw: "Ván chơi kết thúc hòa!"
+        };
+
+        state.error =
+          results[message.result] || "Ván chơi đã kết thúc.";
+      }
+      break;
+
     case "CommandRejected":
       if (
         message.requestId === null ||
         message.requestId === state.pending?.requestId
       ) {
+        if (state.pending?.type === "NightAction") {
+          state.nightMessage =
+            "Hành động không được chấp nhận.";
+        }
+
+        if (state.pending?.type === "HunterAction") {
+          state.hunterMessage =
+            "Server chưa xử lý hành động Hunter: " +
+            (
+              message.message ||
+              message.code ||
+              "Lệnh bị từ chối."
+            );
+
+          // Giu Hunter pending va mo lai nut khi Server tu choi.
+          state.hunterActionDone = false;
+        }
+
         state.pending = null;
         state.error =
-          message.message || message.code || "Yêu cầu bị từ chối.";
+          message.message ||
+          message.code ||
+          "Yêu cầu bị từ chối.";
       }
+      break;
+
+    default:
       break;
   }
 
@@ -381,6 +880,7 @@ el.joinForm.addEventListener("submit", event => {
   event.preventDefault();
 
   const fields = readRoomForm();
+
   if (fields) {
     sendCommand("JoinGame", fields);
   }
@@ -388,15 +888,14 @@ el.joinForm.addEventListener("submit", event => {
 
 el.createButton.addEventListener("click", () => {
   const fields = readRoomForm();
+
   if (fields) {
     sendCommand("CreateRoom", fields);
   }
 });
 
 el.readyButton.addEventListener("click", () => {
-  const me = state.players.find(
-    player => player.playerId === state.selfPlayerId
-  );
+  const me = getSelfPlayer();
 
   if (me) {
     sendCommand("SetReady", { ready: !me.ready });
@@ -413,10 +912,92 @@ voteEl["vote-form"].addEventListener("submit", event => {
   event.preventDefault();
   const targetId = voteEl["vote-target"].value;
   if (!canChooseTarget() || !targetId) return;
-  sendCommand(voting.canShoot ? "HunterChoice" : "Vote", {targetId});
+  sendCommand("Vote", {targetId});
 });
-voteEl["hunter-pass"].addEventListener("click", () => {
-  if (voting.canShoot) sendCommand("HunterChoice", {targetId: null});
+
+// Chi Host duoc phep gui StartGame tu giao dien.
+// Pure Engine van kiem tra lai quyen va luat.
+el.startButton.addEventListener("click", () => {
+  if (!canStartGame()) {
+    state.error =
+      "Cần Host, đủ 8 hoặc 9 người và tất cả sẵn sàng.";
+    render();
+    return;
+  }
+
+  sendCommand("StartGame");
+});
+
+el.wolfTarget.addEventListener("change", render);
+el.seerTarget.addEventListener("change", render);
+el.guardTarget.addEventListener("change", render);
+el.witchTarget.addEventListener("change", render);
+el.hunterTarget.addEventListener("change", render);
+
+el.wolfSubmit.addEventListener("click", () => {
+  if (el.wolfTarget.value) {
+    sendNightAction({
+      action: "WolfTarget",
+      targetId: el.wolfTarget.value
+    });
+  }
+});
+
+el.seerSubmit.addEventListener("click", () => {
+  if (el.seerTarget.value) {
+    sendNightAction({
+      action: "SeerTarget",
+      targetId: el.seerTarget.value
+    });
+  }
+});
+
+el.guardSubmit.addEventListener("click", () => {
+  if (el.guardTarget.value) {
+    sendNightAction({
+      action: "GuardTarget",
+      targetId: el.guardTarget.value
+    });
+  }
+});
+
+el.witchHeal.addEventListener("click", () => {
+  if (state.witchVictimId !== null) {
+    sendNightAction({
+      action: "WitchHeal"
+    });
+  }
+});
+
+el.witchPoison.addEventListener("click", () => {
+  if (el.witchTarget.value) {
+    sendNightAction({
+      action: "WitchPoison",
+      targetId: el.witchTarget.value
+    });
+  }
+});
+
+el.witchPass.addEventListener("click", () => {
+  sendNightAction({
+    action: "WitchPass"
+  });
+});
+
+// Hunter: chi gui khi Server da phat HunterShotPending.
+el.hunterShoot.addEventListener("click", () => {
+  if (el.hunterTarget.value) {
+    sendHunterAction({
+      action: "HunterShot",
+      targetId: el.hunterTarget.value
+    });
+  }
+});
+
+el.hunterPass.addEventListener("click", () => {
+  sendHunterAction({
+    action: "HunterPass"
+  });
 });
 
 socket = new WebSocket(WS_URL);
@@ -428,10 +1009,26 @@ socket.addEventListener("open", () => {
 });
 
 socket.addEventListener("message", event => {
+  let message;
+
   try {
-    handleServerMessage(JSON.parse(event.data));
+    message = JSON.parse(event.data);
   } catch {
-    state.error = "Server gửi dữ liệu không đọc được.";
+    state.error =
+      "Server gửi dữ liệu JSON không hợp lệ.";
+    render();
+    return;
+  }
+
+  try {
+    handleServerMessage(message);
+  } catch (error) {
+    console.error(
+      "Loi xu ly Server message:",
+      error
+    );
+    state.error =
+      "Không xử lý được phản hồi từ Server.";
     render();
   }
 });
@@ -439,6 +1036,7 @@ socket.addEventListener("message", event => {
 socket.addEventListener("close", () => {
   state.connected = false;
   state.pending = null;
+  resetRoomState();
   render();
 });
 

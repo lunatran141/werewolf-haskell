@@ -16,7 +16,12 @@ function setup() {
     fire(type) { this.listeners[type]({preventDefault() {}}); }
   }
   const elements = new Map();
+  // Mỗi selector phải tồn tại trong HTML thật; bắt lỗi mất panel hoặc trùng ID khi merge.
+  const html = readFileSync(join(__dirname, '../web/index.html'), 'utf8');
+  const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
+  assert.equal(new Set(ids).size, ids.length, 'HTML không được trùng ID');
   const get = id => {
+    assert.ok(ids.includes(id), `Không có phần tử #${id}`);
     if (!elements.has(id)) elements.set(id, new Element());
     return elements.get(id);
   };
@@ -27,7 +32,7 @@ function setup() {
     addEventListener(type, callback) { this.listeners[type] = callback; }
     send(data) { this.sent.push(JSON.parse(data)); }
   }
-  const context = vm.createContext({WebSocket: Socket, document: {
+  const context = vm.createContext({WebSocket: Socket, console, document: {
     querySelector: selector => get(selector.slice(1)), getElementById: get,
     createElement: () => new Element()
   }});
@@ -92,11 +97,13 @@ test('Hòa/không phiếu và vòng mới hiển thị đúng, xóa tally dù Da
 
 test('Hunter được bỏ qua; role chỉ hiện khi nhận reveal công khai', () => {
   const {get, connection, message, snapshot} = setup();
+  message({type: 'YourRole', roomId: 'R', role: 'Hunter'});
   snapshot({canShoot: true, resolved: true});
-  assert.equal(get('hunter-pass').hidden, false);
+  assert.equal(get('hunter-action-panel').hidden, false);
+  assert.equal(get('hunter-pass').disabled, false);
   get('hunter-pass').fire('click');
-  assert.equal(connection.sent[0].type, 'HunterChoice');
-  assert.equal(connection.sent[0].targetId, null);
+  assert.equal(connection.sent[0].type, 'HunterAction');
+  assert.deepEqual(connection.sent[0].choice, {action: 'HunterPass'});
   assert.equal(get('vote-reveals').children.length, 0);
   message({type: 'PlayerRoleRevealed', roomId: 'R', playerId: 'p2', role: 'Hunter', team: 'Village'});
   assert.match(get('vote-reveals').children[0].textContent, /Hai.*Hunter/);
@@ -110,5 +117,48 @@ test('Sai phase, người chết và mất kết nối đều khóa thao tác', 
   assert.equal(get('vote-button').disabled, true);
   snapshot(); choose(); connection.readyState = 3; connection.listeners.close();
   assert.equal(get('vote-button').disabled, true);
-  assert.match(get('voting-status').textContent, /Mất kết nối/);
+  assert.match(get('connection-status').textContent, /Mất kết nối/);
+  assert.equal(get('voting-section').hidden, true);
+  assert.equal(get('join-section').hidden, false);
+});
+
+test('Giữ StartGame và Night UI của T05 sau khi ghép Voting', () => {
+  const {get, connection, message, snapshot} = setup();
+  snapshot({phase: 'Lobby', players: Array.from({length: 8}, (_, i) =>
+    ({playerId: `p${i + 1}`, displayName: `Người ${i + 1}`, alive: true, ready: true}))});
+  assert.equal(get('start-button').disabled, false);
+  get('start-button').fire('click');
+  assert.equal(connection.sent[0].type, 'StartGame');
+  message({type: 'YourRole', roomId: 'R', role: 'Seer'});
+  message({type: 'PhaseChanged', roomId: 'R', phase: 'Night'});
+  snapshot({phase: 'Night'});
+  assert.equal(get('night-section').hidden, false);
+  assert.equal(get('seer-action-panel').hidden, false);
+  assert.equal(get('wolf-action-panel').hidden, true);
+  get('seer-target').value = 'p2'; get('seer-target').fire('change');
+  get('seer-submit').fire('click');
+  assert.equal(connection.sent[1].type, 'NightAction');
+  assert.deepEqual(connection.sent[1].choice, {action: 'SeerTarget', targetId: 'p2'});
+  message({type: 'NightActionAccepted', roomId: 'R'});
+  message({type: 'SeerResult', roomId: 'R', team: 'Wolves'});
+  assert.match(get('seer-result-text').textContent, /Sói/);
+  assert.equal(get('seer-submit').disabled, true);
+  snapshot({phase: 'Day'});
+  snapshot({phase: 'Voting'});
+  assert.equal(get('night-section').hidden, true);
+  assert.equal(get('voting-section').hidden, false);
+});
+
+test('Hunter dùng cùng nút bắn ở Night và Voting, phản hồi có hunterId', () => {
+  for (const phase of ['Night', 'Voting']) {
+    const {get, connection, message, snapshot} = setup();
+    message({type: 'YourRole', roomId: 'R', role: 'Hunter'});
+    snapshot({phase, canShoot: true, resolved: true});
+    get('hunter-target').value = 'p2'; get('hunter-target').fire('change');
+    get('hunter-shoot').fire('click');
+    assert.deepEqual(connection.sent[0].choice, {action: 'HunterShot', targetId: 'p2'});
+    assert.equal(get('hunter-shoot').disabled, true);
+    message({type: 'HunterShotResolved', roomId: 'R', hunterId: 'p1', targetId: 'p2'});
+    assert.equal(get('hunter-pass').disabled, true);
+  }
 });

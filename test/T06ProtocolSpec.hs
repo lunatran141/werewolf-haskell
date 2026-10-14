@@ -28,13 +28,16 @@ main = hspec $ do
         "{\"type\":\"Vote\",\"requestId\":\"r3\",\"roomId\":\"ROOM-01\"}"
         `shouldSatisfy` isLeft
 
-    -- null là chủ động bỏ qua; thiếu trường là thông điệp chưa hợp lệ.
-    it "HunterChoice round-trip ca ban va bo qua" $ do
-      let choices = [ClientHunterChoice "h1" "R" (Just "p2"), ClientHunterChoice "h2" "R" Nothing]
+    -- Dùng cùng contract HunterAction với T05, không giữ hai giao thức cạnh tranh.
+    it "HunterAction round-trip ca ban va bo qua" $ do
+      let choices = [ClientHunterAction "h1" "R" (HunterShot "p2"), ClientHunterAction "h2" "R" HunterPass]
       map (decodeClientMessage . encode) choices `shouldBe` map Right choices
 
-    it "HunterChoice thieu targetId bi tu choi" $
-      decodeClientMessage "{\"type\":\"HunterChoice\",\"requestId\":\"h\",\"roomId\":\"R\"}" `shouldSatisfy` isLeft
+    it "HunterShot thieu targetId bi tu choi" $
+      decodeClientMessage "{\"type\":\"HunterAction\",\"requestId\":\"h\",\"roomId\":\"R\",\"choice\":{\"action\":\"HunterShot\"}}" `shouldSatisfy` isLeft
+
+    it "HunterAction khong chap nhan hanh dong cua vai khac" $
+      decodeClientMessage "{\"type\":\"HunterAction\",\"requestId\":\"h\",\"roomId\":\"R\",\"choice\":{\"action\":\"WitchPass\"}}" `shouldSatisfy` isLeft
 
     it "Snapshot, tally va phan hoi request round-trip" $ do
       let messages =
@@ -74,8 +77,8 @@ main = hspec $ do
     it "Hunter prompt private va Hunter result public round-trip JSON" $ do
       let messages =
             [ MsgHunterShotPending "ROOM-01"
-            , MsgHunterShotResolved "ROOM-01" (Just "p1")
-            , MsgHunterShotResolved "ROOM-01" Nothing
+            , MsgHunterShotResolved "ROOM-01" "p6" (Just "p1")
+            , MsgHunterShotResolved "ROOM-01" "p6" Nothing
             ]
       map (eitherDecode . encodeServerMessage) messages
         `shouldBe` map Right messages
