@@ -3,12 +3,14 @@
 
 module Main (main) where
 
-import Data.Aeson (Value, encode, eitherDecode)
+import Data.Aeson
+  ( Value, encode, eitherDecode, object, (.=) )
 import Data.Either (isLeft)
 
-
 import Domain.Types
-  ( NightChoice(..)
+  ( Appearance(..)
+  , defaultAppearance
+  , NightChoice(..)
   , Role(..)
   , Team(..)
   , Phase(..)
@@ -24,12 +26,37 @@ import Protocol.Types
 import Test.Hspec
   ( describe, hspec, it, shouldBe, shouldSatisfy )
 
+-- Appearance tuy chinh hop le theo preset T07.
+customAppearance :: Appearance
+customAppearance =
+  Appearance
+    { appearanceHair = "ponytail"
+    , appearanceHairColor = "#8B5CF6"
+    , appearanceSkin = "#C28865"
+    , appearanceOutfit = "#064E3B"
+    , appearanceAccessory = "flower_crown"
+    }
+
+-- PlayerView cong khai khong co Role hoac Team.
+samplePlayerView :: PlayerView
+samplePlayerView =
+  PlayerView "p1" "Van" False True defaultAppearance
+
+-- Tao JSON Appearance de doi chieu contract frontend.
+appearanceJSON :: Appearance -> Value
+appearanceJSON appearance =
+  object
+    [ "hair" .= appearanceHair appearance
+    , "hairColor" .= appearanceHairColor appearance
+    , "skin" .= appearanceSkin appearance
+    , "outfit" .= appearanceOutfit appearance
+    , "accessory" .= appearanceAccessory appearance
+    ]
 
 main :: IO ()
 main = hspec $ do
 
   -- Lobby JSON - Giu nguyen 11 bai test cu.
-
   describe "Lobby JSON" $ do
 
     it "doc JoinGame" $
@@ -67,12 +94,12 @@ main = hspec $ do
             eitherDecode
               (encodeServerMessage
                 (MsgLobbySnapshot "ROOM-01" "p1" "p1"
-                  [PlayerView "p1" "Van" False]))
+                  [samplePlayerView]))
               :: Either String Value
 
           expected =
             eitherDecode
-              "{\"type\":\"LobbySnapshot\",\"roomId\":\"ROOM-01\",\"selfPlayerId\":\"p1\",\"hostPlayerId\":\"p1\",\"players\":[{\"playerId\":\"p1\",\"displayName\":\"Van\",\"ready\":false}]}"
+              "{\"type\":\"LobbySnapshot\",\"roomId\":\"ROOM-01\",\"selfPlayerId\":\"p1\",\"hostPlayerId\":\"p1\",\"players\":[{\"playerId\":\"p1\",\"displayName\":\"Van\",\"ready\":false,\"alive\":true,\"appearance\":{\"hair\":\"messy\",\"hairColor\":\"#1E293B\",\"skin\":\"#FDE2D0\",\"outfit\":\"#1E1B4B\",\"accessory\":\"none\"}}]}"
               :: Either String Value
 
       actual `shouldBe` expected
@@ -109,7 +136,8 @@ main = hspec $ do
         `shouldBe` map Right commands
 
     it "round-trip tat ca ServerMessage" $ do
-      let player = PlayerView "p1" "Van" False
+      let player = samplePlayerView
+
           messages =
             [ MsgLobbySnapshot "ROOM-01" "p1" "p1" [player]
             , MsgPlayerJoined "ROOM-01" player
@@ -126,8 +154,102 @@ main = hspec $ do
 
       map decodeBack messages `shouldBe` map Right messages
 
-  -- T05 - Protocol NightAction JSON - 10 bai test.
+  -- T02 - Appearance va PlayerView JSON.
+  describe "T02 - Appearance va PlayerView JSON" $ do
 
+    it "A10 - Appearance tuy chinh round-trip qua PlayerView" $ do
+      let player =
+            PlayerView "p2" "Binh" True True customAppearance
+
+          encoded =
+            encodeServerMessage
+              (MsgPlayerJoined "ROOM-01" player)
+
+          decoded =
+            eitherDecode encoded :: Either String ServerMessage
+
+      decoded `shouldBe`
+        Right (MsgPlayerJoined "ROOM-01" player)
+
+    it "A11 - JSON PlayerView co alive va appearance" $ do
+      let player =
+            PlayerView "p2" "Binh" True False customAppearance
+
+          actual =
+            eitherDecode
+              (encodeServerMessage
+                (MsgPlayerJoined "ROOM-01" player))
+              :: Either String Value
+
+          expected =
+            Right $
+              object
+                [ "type" .= ("PlayerJoined" :: String)
+                , "roomId" .= ("ROOM-01" :: String)
+                , "player" .=
+                    object
+                      [ "playerId" .= ("p2" :: String)
+                      , "displayName" .= ("Binh" :: String)
+                      , "ready" .= True
+                      , "alive" .= False
+                      , "appearance" .= appearanceJSON customAppearance
+                      ]
+                ]
+
+      actual `shouldBe` expected
+
+    it "A12 - LobbySnapshot khong chua Role hoac Team" $ do
+      let actual =
+            eitherDecode
+              (encodeServerMessage
+                (MsgLobbySnapshot "ROOM-01" "p1" "p1"
+                  [samplePlayerView]))
+              :: Either String Value
+
+          expected =
+            Right $
+              object
+                [ "type" .= ("LobbySnapshot" :: String)
+                , "roomId" .= ("ROOM-01" :: String)
+                , "selfPlayerId" .= ("p1" :: String)
+                , "hostPlayerId" .= ("p1" :: String)
+                , "players" .=
+                    [ object
+                        [ "playerId" .= ("p1" :: String)
+                        , "displayName" .= ("Van" :: String)
+                        , "ready" .= False
+                        , "alive" .= True
+                        , "appearance" .= appearanceJSON defaultAppearance
+                        ]
+                    ]
+                ]
+
+      actual `shouldBe` expected
+
+    it "A13 - Tu choi PlayerView thieu appearance" $ do
+      let json =
+            "{\"playerId\":\"p1\",\"displayName\":\"Van\",\"ready\":false,\"alive\":true}"
+          decoded = eitherDecode json :: Either String PlayerView
+
+      decoded `shouldSatisfy` isLeft
+
+    it "A14 - CreateRoom co Appearance round-trip" $ do
+      let command =
+            ClientCreateRoomWithAppearance
+              "r1" "ROOM-01" "Van" customAppearance
+
+      decodeClientMessage (encode command)
+        `shouldBe` Right command
+
+    it "A15 - JoinGame co Appearance round-trip" $ do
+      let command =
+            ClientJoinWithAppearance
+              "r2" "ROOM-01" "Binh" customAppearance
+
+      decodeClientMessage (encode command)
+        `shouldBe` Right command
+
+  -- T05 - Protocol NightAction JSON - 10 bai test.
   describe "T05 - Protocol NightAction JSON" $ do
 
     it "N01 - Doc JSON WolfTarget" $
@@ -194,19 +316,16 @@ main = hspec $ do
         "{\"type\":\"NightAction\",\"roomId\":\"ROOM-01\",\"choice\":{\"action\":\"WitchPass\"}}"
         `shouldSatisfy` isLeft
 
-  -- T05 - Night Server Events JSON - 7 bai test moi.
-
+  -- T05 - Night Server Events JSON - 7 bai test.
   describe "T05 - Night Server Events JSON" $ do
 
     it "E01 - NightActionAccepted round-trip" $ do
       let message = MsgNightActionAccepted "ROOM-01"
-
       eitherDecode (encodeServerMessage message)
         `shouldBe` Right message
 
     it "E02 - SeerResult round-trip" $ do
       let message = MsgSeerResult "ROOM-01" Wolves
-
       eitherDecode (encodeServerMessage message)
         `shouldBe` Right message
 
@@ -215,20 +334,17 @@ main = hspec $ do
             [ MsgWitchVictimNotice "ROOM-01" (Just "p7")
             , MsgWitchVictimNotice "ROOM-01" Nothing
             ]
-
       map (eitherDecode . encodeServerMessage) messages
         `shouldBe` map Right messages
 
     it "E04 - NightResolved round-trip" $ do
       let message = MsgNightResolved "ROOM-01" ["p7", "p8"]
-
       eitherDecode (encodeServerMessage message)
         `shouldBe` Right message
 
     it "E05 - PlayerRoleRevealed round-trip" $ do
       let message =
             MsgPlayerRoleRevealed "ROOM-01" "p7" Villager Village
-
       eitherDecode (encodeServerMessage message)
         `shouldBe` Right message
 
@@ -239,7 +355,6 @@ main = hspec $ do
             , MsgPhaseChanged "ROOM-01" Voting
             , MsgPhaseChanged "ROOM-01" GameOver
             ]
-
       map (eitherDecode . encodeServerMessage) messages
         `shouldBe` map Right messages
 
@@ -249,74 +364,77 @@ main = hspec $ do
             , MsgGameFinished "ROOM-01" (Winner Wolves)
             , MsgGameFinished "ROOM-01" Draw
             ]
-
       map (eitherDecode . encodeServerMessage) messages
         `shouldBe` map Right messages
 
+    it "E08 - PlayerDied JSON round-trip" $ do
+      let message = MsgPlayerDied "ROOM-01" "p7"
+
+      eitherDecode (encodeServerMessage message)
+        `shouldBe` Right message
+
+    it "E09 - GameRolesRevealed JSON round-trip" $ do
+      let message =
+            MsgGameRolesRevealed
+              "ROOM-01"
+              [ ("p1", Werewolf)
+              , ("p2", Seer)
+              , ("p7", Villager)
+              ]
+
+      eitherDecode (encodeServerMessage message)
+        `shouldBe` Right message
 
 
   -- T05 - Kiem thu phan quyen Night Events.
-
   describe "T05 - Night Event Routing" $ do
 
     it "V01 - Seer chi nhan ket qua soi cua minh" $ do
       let events = [SeerResult "p3" Wolves]
-
       nightMessagesFor "ROOM-01" "p3" events
         `shouldBe` [MsgSeerResult "ROOM-01" Wolves]
-
       nightMessagesFor "ROOM-01" "p5" events
         `shouldBe` []
 
     it "V02 - Witch chi nhan thong bao nan nhan cua minh" $ do
       let events = [WitchVictimNotice "p5" (Just "p7")]
-
       nightMessagesFor "ROOM-01" "p5" events
-        `shouldBe`
-          [MsgWitchVictimNotice "ROOM-01" (Just "p7")]
-
+        `shouldBe` [MsgWitchVictimNotice "ROOM-01" (Just "p7")]
       nightMessagesFor "ROOM-01" "p3" events
         `shouldBe` []
 
     it "V03 - NightActionAccepted chi gui cho actor" $ do
       let events = [NightActionAccepted "p2"]
-
       nightMessagesFor "ROOM-01" "p2" events
         `shouldBe` [MsgNightActionAccepted "ROOM-01"]
-
       nightMessagesFor "ROOM-01" "p4" events
         `shouldBe` []
 
     it "V04 - PhaseChanged duoc gui cho moi nguoi" $ do
       let events = [PhaseChanged Day]
           expected = [MsgPhaseChanged "ROOM-01" Day]
-
       nightMessagesFor "ROOM-01" "p1" events
         `shouldBe` expected
-
       nightMessagesFor "ROOM-01" "p8" events
         `shouldBe` expected
 
-    it "V05 - PlayerRoleRevealed la public" $ do
+    
+    it "V05 - Khong cong khai Role khi nguoi choi chet" $ do
       let events =
             [PlayerRoleRevealed "p7" Villager Village]
 
-          expected =
-            [MsgPlayerRoleRevealed "ROOM-01" "p7" Villager Village]
-
       nightMessagesFor "ROOM-01" "p1" events
-        `shouldBe` expected
+        `shouldBe` []
 
-      nightMessagesFor "ROOM-01" "p8" events
-        `shouldBe` expected
+      nightMessagesFor "ROOM-01" "p7" events
+        `shouldBe` []
+
 
     it "V06 - GameFinished la public" $ do
       let events = [GameFinished (Winner Village)]
           expected = [MsgGameFinished "ROOM-01" (Winner Village)]
-
       nightMessagesFor "ROOM-01" "p1" events
         `shouldBe` expected
-
       nightMessagesFor "ROOM-01" "p8" events
         `shouldBe` expected
 
@@ -326,39 +444,28 @@ main = hspec $ do
             , WitchVictimNotice "p5" (Just "p7")
             , PhaseChanged Day
             ]
-
       nightMessagesFor "ROOM-01" "p3" events
         `shouldBe`
           [ MsgSeerResult "ROOM-01" Wolves
           , MsgPhaseChanged "ROOM-01" Day
           ]
-
       nightMessagesFor "ROOM-01" "p5" events
         `shouldBe`
           [ MsgWitchVictimNotice "ROOM-01" (Just "p7")
           , MsgPhaseChanged "ROOM-01" Day
           ]
-
       nightMessagesFor "ROOM-01" "p8" events
-        `shouldBe`
-          [MsgPhaseChanged "ROOM-01" Day]
-
+        `shouldBe` [MsgPhaseChanged "ROOM-01" Day]
 
     it "V08 - Chi gui YourRole cho dung nguoi nhan" $ do
       let events =
             [ PlayerRoleAssigned "p3" Seer
             , PhaseChanged Night
             ]
-
-      -- p3 nhan vai Seer cua chinh minh.
       nightMessagesFor "ROOM-01" "p3" events
         `shouldBe`
           [ MsgYourRole "ROOM-01" Seer
           , MsgPhaseChanged "ROOM-01" Night
           ]
-
-      -- p8 khong duoc nhan vai cua p3.
-      -- PhaseChanged van la su kien cong khai.
       nightMessagesFor "ROOM-01" "p8" events
-        `shouldBe`
-          [MsgPhaseChanged "ROOM-01" Night]
+        `shouldBe` [MsgPhaseChanged "ROOM-01" Night]
