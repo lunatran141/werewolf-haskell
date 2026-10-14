@@ -55,7 +55,8 @@ import Domain.Types
   , Player(..)
 
   , PlayerId
-
+  , Phase(..)
+  , NightChoice(..)
   )
 
 import Domain.Validation (expectedRoles)
@@ -93,7 +94,7 @@ import Server.Broadcast
   , lobbySnapshot
 
   , nightMessagesFor
-
+  , votingSnapshot
   )
 
 import Server.GameLoop
@@ -317,6 +318,11 @@ beginSession room actor sessionRef outbound = do
           nightMessagesFor (roomId room) actor safeEvents
 
     forM_ nightMessages (sendToClient outbound)
+
+    -- Snapshot sau event giữ UI đồng bộ theo state đã commit; Lobby giữ contract cũ.
+    if gamePhase (updateState update) /= Lobby
+      then sendToClient outbound (votingSnapshot (roomId room) actor (updateState update))
+      else pure ()
 
   writeIORef sessionRef (Just (room, broadcastThread))
 
@@ -722,10 +728,19 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
 
                   pure ()
 
-    -- T05/T06: HunterAction co giao thuc rieng.
-    -- Chua co Engine T06 nen khong dua vao Room Command Queue.
-    -- Tra loi tu choi co kiem soat thay vi xu ly sai hoac crash.
-    ClientHunterAction requestId rid _choice -> do
+    -- T05/T06: Giữ contract HunterAction của develop, gắn actor từ session.
+    -- NightChoice chỉ là payload; Domain ResolveHunter kiểm tra quyền pending.
+    ClientHunterAction requestId rid choice ->
+      case choice of
+        HunterShot target -> handleVotingCommand requestId rid (ResolveHunter actor (Just target))
+        HunterPass -> handleVotingCommand requestId rid (ResolveHunter actor Nothing)
+        _ -> reject outbound requestId "INVALID_HUNTER_ACTION" "Lựa chọn Hunter không hợp lệ."
+
+    -- Vote chỉ nhận mục tiêu; không nhận ID hoặc vai do Browser khai báo.
+    ClientVote requestId rid target ->
+      handleVotingCommand requestId rid (Vote actor target)
+  where
+    handleVotingCommand requestId rid command = do
       current <- readIORef sessionRef
 
       case current of
@@ -738,11 +753,20 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
               reject outbound requestId "WRONG_ROOM"
                 "Ban khong o trong phong nay."
 
-          | otherwise ->
-              reject outbound requestId "HUNTER_ENGINE_NOT_READY"
-                "Hunter dang cho Engine T06 hoan thien."
+          | otherwise -> do
+              result <- submitCommand room requestId actor command
 
--- Tao WebSocket connection va session.
+              case result of
+                Left err ->
+                  sendToClient outbound
+                    (MsgRejected
+                      (Just requestId)
+                      (show err)
+                      ("Yêu cầu bị từ chối: " ++ show err))
+
+                Right _ ->
+                  -- Receipt theo requestId để UI chỉ kết thúc đúng yêu cầu đang chờ.
+                  sendToClient outbound (MsgActionAccepted requestId rid)
 
 webSocketApp
 

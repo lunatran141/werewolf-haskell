@@ -4,6 +4,8 @@ import Domain.Types
 import Domain.Night
   ( NightOutcome(..), nightActionPrivateEvents
   , wolfVotingComplete, wolfVictim, resolveNightEffects )
+import Domain.Rules
+  ( checkWin, lynchTarget, tallyVotes )
 import Domain.Validation
   ( validateGameInvariant
   , validateJoin
@@ -13,6 +15,11 @@ import Domain.Validation
   , validateRolePreset
   , validateStartGame
   , validateNightAction
+  , validateChat
+  , validateHunterShot
+  , validatePlayerAlive
+  , validatePlayerExists
+  , validateVote
   )
 -- Them nguoi choi vao Lobby.
 -- PlayerId do Server cap; validateJoin tao Player voi ten da chuan hoa.
@@ -371,3 +378,186 @@ completeNightTurn state = do
     else Right ()
   (nextState, phaseEvents) <- finishResolvedNight readyState (nightGameResult readyState)
   pure (nextState, reveals ++ phaseEvents)
+
+-- T06: Dispatcher chung cho Domain Engine. Các lệnh Resolve vẫn là lệnh
+-- nội bộ do Server gọi, còn Vote/Chat đi qua cùng một pure transition.
+applyCommand
+  :: GameState
+  -> Command
+  -> Either GameError (GameState, [DomainEvent])
+applyCommand state command
+  | gamePhase state == GameOver = Left GameAlreadyOver
+  | otherwise =
+      case command of
+        Join _ _ -> applyLobbyCommand state command
+        Leave _ -> applyLobbyCommand state command
+        SetReady _ _ -> applyLobbyCommand state command
+        StartGame _ _ -> applyPhaseCommand state command
+        AdvancePhase -> applyPhaseCommand state command
+        NightAction _ _ -> applyNightCommand state command
+        Vote actor target -> castVote state actor target
+        Chat actor message -> sendChat state actor message
+        ResolveNight -> applyNightCommand state command
+        ResolveVoting -> resolveVoting state
+        ResolveHunter actor target -> resolveHunterShot state actor target
+
+-- T06: Nhận một phiếu hợp lệ và chỉ thêm đúng một bản ghi vào round hiện tại.
+-- Nếu validation lỗi thì state và event đều không thay đổi.
+castVote
+  :: GameState
+  -> PlayerId
+  -> PlayerId
+  -> Either GameError (GameState, [DomainEvent])
+castVote state actor target = do
+  validateVote state actor target
+  if null (gamePendingReveals state) then Right () else Left InvalidGameState
+  let newState = state
+        { gameVotes = gameVotes state ++ [(actor, target)] }
+  validateGameInvariant newState
+  pure (newState, [VoteUpdated actor target])
+
+-- T06: Kiểm tra cửa sổ Voting trước khi tally. Vote đã chốt hoặc Hunter
+-- đang chờ bắn thì không được nhận thêm phiếu.
+validateVotingWindow :: GameState -> Either GameError ()
+validateVotingWindow state = do
+  if gamePhase state == Voting then Right () else Left WrongPhase
+  if gameVotingResolved state
+    then Left InvalidGameState
+    else Right ()
+  if gamePendingHunter state == Nothing
+    then Right ()
+    else Left HunterNotPending
+  validateGameInvariant state
+  validateStoredVotes state
+  if null (gamePendingReveals state) then Right () else Left InvalidGameState
+
+-- T06: Kiểm tra lại các phiếu đã lưu để bảo vệ Engine ngay cả khi caller
+-- tạo GameState trực tiếp thay vì đi qua castVote.
+validateStoredVotes :: GameState -> Either GameError ()
+validateStoredVotes state = mapM_ validateEntry (gameVotes state)
+  where
+    validateEntry (actor, target) = do
+      voter <- validatePlayerExists actor (gamePlayers state)
+      _ <- validatePlayerAlive voter
+      victim <- validatePlayerExists target (gamePlayers state)
+      _ <- validatePlayerAlive victim
+      if actor == target then Left InvalidTarget else Right ()
+
+-- T06: Chốt toàn bộ phiếu. Tie và no-vote đều đi thẳng sang Night kế tiếp,
+-- tuyệt đối không mở lại round Voting.
+resolveVoting :: GameState -> Either GameError (GameState, [DomainEvent])
+resolveVoting state = do
+  validateVotingWindow state
+  let target = lynchTarget (gameVotes state)
+      tallyEvents = [VotingResolved (tallyVotes (gameVotes state)) target]
+      baseState = state
+        { gameVotes = []
+        , gameVotingResolved = True
+        }
+  case target of
+    Nothing ->
+      finishVotingDeaths baseState tallyEvents
+
+    Just targetId -> do
+      targetPlayer <- validatePlayerExists targetId (gamePlayers state)
+      _ <- validatePlayerAlive targetPlayer
+      let killedState = baseState
+            { gamePlayers = markDead targetId (gamePlayers state)
+            , gamePendingReveals = appendUnique targetId (gamePendingReveals state)
+            , gamePendingHunter =
+                if playerRole targetPlayer == Just Hunter
+                  then Just targetId
+                  else Nothing
+            }
+      validateGameInvariant killedState
+      case gamePendingHunter killedState of
+        Just hunterId ->
+          -- Chưa reveal role/chưa checkWin khi Hunter còn quyền bắn.
+          pure (killedState, tallyEvents ++ [HunterShotPending hunterId])
+        Nothing ->
+          finishVotingDeaths killedState tallyEvents
+
+-- T06: Xử lý lựa chọn bắn hoặc bỏ qua của Hunter đang pending.
+resolveHunterShot
+  :: GameState
+  -> PlayerId
+  -> Maybe PlayerId
+  -> Either GameError (GameState, [DomainEvent])
+resolveHunterShot state actor target = do
+  -- Hunter có quyền bắn sau khi chết ở cả Night và Voting.
+  if gamePhase state `elem` [Night, Voting] then Right () else Left WrongPhase
+  validateGameInvariant state
+  if (gamePhase state == Night && gameNightResolved state)
+      || (gamePhase state == Voting && gameVotingResolved state)
+    then Right () else Left InvalidGameState
+  validateHunterShot state actor target
+  let newState =
+        state
+          { gamePlayers = maybe (gamePlayers state)
+              (\targetId -> markDead targetId (gamePlayers state))
+              target
+          , gamePendingReveals = maybe (gamePendingReveals state)
+              (\targetId -> appendUnique targetId (gamePendingReveals state))
+              target
+          , gamePendingHunter = Nothing
+          , gameHunterTriggered = True
+          }
+  validateGameInvariant newState
+  case gamePhase state of
+    Night -> do
+      (finished, events) <- completeNightTurn newState
+      pure (finished, HunterShotResolved actor target
+        : map PlayerEliminated (gamePendingReveals newState) ++ events)
+    _ -> finishVotingDeaths newState [HunterShotResolved actor target]
+
+-- T06: Sau khi mọi death effect và Hunter chain đã xong, reveal đúng một
+-- lần rồi mới kiểm tra thắng và chuyển phase.
+finishVotingDeaths
+  :: GameState
+  -> [DomainEvent]
+  -> Either GameError (GameState, [DomainEvent])
+finishVotingDeaths state prefixEvents = do
+  if gamePhase state /= Voting then Left WrongPhase else Right ()
+  if gamePendingHunter state /= Nothing then Left HunterNotPending else Right ()
+  if not (gameVotingResolved state) then Left InvalidGameState else Right ()
+  validateGameInvariant state
+  reveals <- pendingRevealEvents state
+  let revealIds = gamePendingReveals state
+      revealedState = state { gamePendingReveals = [] }
+      publicDeaths = [PlayerEliminated pid | pid <- revealIds]
+  -- Dùng lại transition T04 để tránh hai nơi định nghĩa cách tăng vòng.
+  (nextState, phaseEvents) <- finishResolvedVoting revealedState (checkWin revealedState)
+  pure (nextState, prefixEvents ++ publicDeaths ++ reveals ++ phaseEvents)
+
+pendingRevealEvents :: GameState -> Either GameError [DomainEvent]
+pendingRevealEvents state = mapM revealOne (gamePendingReveals state)
+  where
+    revealOne pid = do
+      player <- validatePlayerExists pid (gamePlayers state)
+      case (playerLifeStatus player, playerRole player) of
+        (Dead, Just role) ->
+          Right (PlayerRoleRevealed pid role (teamOfRole role))
+        _ -> Left InvalidGameState
+
+-- T06: Chat chỉ phát event public ở Day và không làm thay đổi gameplay state.
+sendChat
+  :: GameState
+  -> PlayerId
+  -> String
+  -> Either GameError (GameState, [DomainEvent])
+sendChat state actor message = do
+  validateChat state actor message
+  validateGameInvariant state
+  pure (state, [ChatMessage actor message])
+
+markDead :: PlayerId -> [Player] -> [Player]
+markDead targetId = map mark
+  where
+    mark player
+      | playerId player == targetId = player {playerLifeStatus = Dead}
+      | otherwise = player
+
+appendUnique :: Eq a => a -> [a] -> [a]
+appendUnique value values
+  | value `elem` values = values
+  | otherwise = values ++ [value]

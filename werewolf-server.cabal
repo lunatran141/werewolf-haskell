@@ -155,7 +155,64 @@ test-suite t05-websocket-test
   main-is: T05WebSocketSpec.hs
   hs-source-dirs: test
   default-language: GHC2021
+  ghc-options: -Wall -Wcompat -threaded
+  build-depends:
+      base >=4.17 && <5
+    , werewolf-server
+    , hspec >=2.10
+    , aeson >=2 && <3
+    , bytestring >=0.11
+    , stm >=2.5 && <3
+    , websockets >=0.12 && <0.14
+
+-- T06: Vote/Tally/Tie/Lynch, duplicate-invalid Vote va Hunter chain.
+test-suite t06-domain-test
+  type: exitcode-stdio-1.0
+  main-is: T06Main.hs
+  hs-source-dirs: test
+  other-modules:
+      DomainT06Spec
+  default-language: GHC2021
   ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , werewolf-server
+    , hspec >=2.10
+
+-- T06: Kiểm thử JSON Vote và lọc event private/public.
+test-suite t06-protocol-test
+  type: exitcode-stdio-1.0
+  main-is: T06ProtocolSpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , werewolf-server
+    , hspec >=2.10
+    , aeson >=2 && <3
+    , bytestring >=0.11
+
+-- T06: Kiểm thử Vote qua STM GameLoop và session authorization.
+test-suite t06-gameloop-test
+  type: exitcode-stdio-1.0
+  main-is: T06GameLoopSpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat -threaded
+  build-depends:
+      base >=4.17 && <5
+    , werewolf-server
+    , hspec >=2.10
+    , stm >=2.5 && <3
+
+-- T06: Kiểm chứng qua socket thật, có chốt Voting và Hunter timeout.
+test-suite t06-websocket-test
+  type: exitcode-stdio-1.0
+  main-is: T06WebSocketSpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat -threaded
   build-depends:
       base >=4.17 && <5
     , werewolf-server

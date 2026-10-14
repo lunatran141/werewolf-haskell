@@ -102,6 +102,22 @@
           </p>
         </section>
 
+        <!-- T06: Khu vực Voting nhận state từ server, không tự tính luật trên UI. -->
+        <section id="voting-section" class="lobby-card voting-card" hidden aria-labelledby="voting-title">
+          <p class="section-label">DIỄN BIẾN VÁN CHƠI</p>
+          <h2 id="voting-title">Bỏ phiếu</h2>
+          <p id="voting-status" role="status" aria-live="polite"></p>
+          <form id="vote-form">
+            <label for="vote-target" class="form-label">Chọn người chơi</label>
+            <select id="vote-target" class="form-control" required></select>
+            <p class="card-description">Mỗi vòng chỉ được gửi một phiếu. Bạn có thể không gửi phiếu để bỏ lượt; server sẽ chốt khi hết thời gian.</p>
+            <button id="vote-button" class="btn main-button" type="submit">Gửi phiếu</button>
+          </form>
+          <p id="vote-result" role="status" aria-live="polite"></p>
+          <ul id="vote-tally" aria-label="Kết quả kiểm phiếu"></ul>
+          <ul id="vote-reveals" aria-label="Vai của người đã bị loại"></ul>
+        </section>
+
         <!-- Lobby Player List -->
         <section id="lobby-section" class="lobby-card" hidden>
           <div class="room-heading">
@@ -355,10 +371,25 @@
             </button>
           </div>
 
-          <!-- Hunter: chi mo quyen ban khi nhan HunterShotPending -->
+          <!-- Waiting -->
           <div
-            id="hunter-action-panel"
+            id="night-waiting-panel"
             class="night-action-panel"
+            hidden
+          >
+            <h3>Đang chờ đêm kết thúc</h3>
+            <p class="card-description">
+              Bạn không có hành động cần thực hiện
+              hoặc đã hoàn thành lượt của mình.
+            </p>
+          </div>
+        </section>
+
+        <!-- T06: Hunter độc lập với Night để vẫn bắn được sau lynch trong Voting. -->
+          <!-- Hunter: chi mo quyen ban khi nhan HunterShotPending -->
+          <section
+            id="hunter-action-panel"
+            class="lobby-card night-action-panel"
             hidden
           >
             <p class="section-label">HUNTER · THỢ SĂN</p>
@@ -424,21 +455,8 @@
             >
               Đang chờ thông báo từ Server.
             </p>
-          </div>
+          </section>
 
-          <!-- Waiting -->
-          <div
-            id="night-waiting-panel"
-            class="night-action-panel"
-            hidden
-          >
-            <h3>Đang chờ đêm kết thúc</h3>
-            <p class="card-description">
-              Bạn không có hành động cần thực hiện
-              hoặc đã hoàn thành lượt của mình.
-            </p>
-          </div>
-        </section>
       </div>
     </div>
   </main>
