@@ -5,6 +5,9 @@ import Domain.Rules
   , countAliveTeam
   )
 import Domain.Types
+import Domain.Engine (applyChatCommand, applyCommand)
+import Protocol.Types (ClientMessage(..), ServerMessage(..))
+import Data.Aeson (decode, encode)
 import Test.Hspec
 
 -- Tạo một Player phục vụ unit test.
@@ -138,3 +141,45 @@ main =
                 , (Hunter, Dead)
                 ]
         checkWin state `shouldBe` Nothing
+
+    describe "T07 - Day Chat" $ do
+      let dayState = testState Day Nothing
+            [ (Werewolf, Alive), (Villager, Alive) ]
+
+      it "nguoi con song duoc chat trong Day" $ do
+        applyChatCommand dayState (Chat "p1" "  xin   chao  ")
+          `shouldBe` Right
+            (dayState, [ChatMessage "p1" "xin chao"])
+
+      it "nguoi da chet khong duoc chat" $ do
+        let deadState = testState Day Nothing
+              [ (Werewolf, Dead), (Villager, Alive) ]
+        applyChatCommand deadState (Chat "p1" "xin chao")
+          `shouldBe` Left DeadPlayer
+
+      it "khong duoc chat ngoai Day" $ do
+        let nightState = testState Night Nothing
+              [ (Werewolf, Alive), (Villager, Alive) ]
+        applyChatCommand nightState (Chat "p1" "xin chao")
+          `shouldBe` Left WrongPhase
+
+      it "tu choi chat rong" $ do
+        applyChatCommand dayState (Chat "p1" "   ")
+          `shouldBe` Left EmptyChat
+
+      it "server tu choi tin nhan dai hon 300 ky tu" $ do
+        applyCommand dayState (Chat "p1" (replicate 301 'a'))
+          `shouldBe` Left ChatTooLong
+
+      it "dispatcher chat dung cung mot noi dung da chuan hoa" $ do
+        applyCommand dayState (Chat "p1" "  xin   chao  ")
+          `shouldBe` applyChatCommand dayState (Chat "p1" "  xin   chao  ")
+
+    describe "T07 - Chat Protocol" $ do
+      it "ClientChat JSON round-trip" $ do
+        let message = ClientChat "r1" "ROOM-01" "xin chao"
+        decode (encode message) `shouldBe` Just message
+
+      it "MsgChatMessage JSON round-trip" $ do
+        let message = MsgChatMessage "ROOM-01" "p1" "xin chao"
+        decode (encode message) `shouldBe` Just message

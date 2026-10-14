@@ -87,7 +87,7 @@ data GameError
   | RoomFull | InvalidRole | InvalidCommand | InvalidNightAction
   | InvalidRoleConfiguration | InvalidGameState
   | AbilityAlreadyUsed | HunterNotPending | InvalidTiePolicy
-  | DuplicateNightAction | EmptyChat | NotReady
+  | DuplicateNightAction | EmptyChat | ChatTooLong | NotReady
   -- T06: Một request đã thành công không được phát lại ở vòng sau.
   | DuplicateRequest
   deriving (Eq, Show, Read)

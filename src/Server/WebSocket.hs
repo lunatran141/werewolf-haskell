@@ -732,15 +732,19 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
     -- NightChoice chỉ là payload; Domain ResolveHunter kiểm tra quyền pending.
     ClientHunterAction requestId rid choice ->
       case choice of
-        HunterShot target -> handleVotingCommand requestId rid (ResolveHunter actor (Just target))
-        HunterPass -> handleVotingCommand requestId rid (ResolveHunter actor Nothing)
+        HunterShot target -> handlePlayerCommand requestId rid (ResolveHunter actor (Just target))
+        HunterPass -> handlePlayerCommand requestId rid (ResolveHunter actor Nothing)
         _ -> reject outbound requestId "INVALID_HUNTER_ACTION" "Lựa chọn Hunter không hợp lệ."
 
     -- Vote chỉ nhận mục tiêu; không nhận ID hoặc vai do Browser khai báo.
     ClientVote requestId rid target ->
-      handleVotingCommand requestId rid (Vote actor target)
+      handlePlayerCommand requestId rid (Vote actor target)
+
+    -- T07: Chat chi hop le trong Day va voi nguoi con song.
+    ClientChat requestId rid messageText ->
+      handlePlayerCommand requestId rid (Chat actor messageText)
   where
-    handleVotingCommand requestId rid command = do
+    handlePlayerCommand requestId rid command = do
       current <- readIORef sessionRef
 
       case current of
@@ -767,6 +771,8 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
                 Right _ ->
                   -- Receipt theo requestId để UI chỉ kết thúc đúng yêu cầu đang chờ.
                   sendToClient outbound (MsgActionAccepted requestId rid)
+
+-- Tao WebSocket connection va session.
 
 webSocketApp
 

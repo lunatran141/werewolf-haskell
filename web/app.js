@@ -1,9 +1,26 @@
 const WS_URL = "ws://localhost:8080/ws";
 let socket = null;
 let requestNumber = 0;
+const VOTE_DURATION_MS = 60_000;
+let voteClockInterval = null;
+
+function createTwinklingStars() {
+  const layer = document.getElementById("twinkling-stars");
+  for (let i = 0; i < 32; i += 1) {
+    const star = document.createElement("span");
+    star.style.setProperty("--star-x", `${2 + (i * 73.17) % 96}%`);
+    star.style.setProperty("--star-y", `${3 + (i * i * 19.7 + i * 11.3) % 92}%`);
+    star.style.setProperty("--star-size", `${1.5 + i % 3}px`);
+    star.style.setProperty("--star-duration", `${2.2 + i % 5 * 0.65}s`);
+    star.style.setProperty("--star-delay", `${-i * 0.31}s`);
+    layer.appendChild(star);
+  }
+}
+createTwinklingStars();
 
 const state = {
   connected: false,
+  entranceMode: "join",
   roomId: null,
   selfPlayerId: null,
   hostPlayerId: null,
@@ -20,14 +37,16 @@ const state = {
   gameResult: null,
   hunterPending: false,
   hunterActionDone: false,
-  hunterMessage: ""
+  hunterMessage: "",
+  chatMessages: [],
+  appearance: null
 };
 
 // T06: Chỉ lưu dữ liệu server cho phép xem; không chứa vai của người còn sống.
 const voting = {
   phase: "Lobby", day: 0, players: [], hasVoted: false,
   canShoot: false, resolved: false, result: null, tally: [],
-  summary: "", reveals: []
+  summary: "", reveals: [], clockDay: null, deadlineMs: null
 };
 
 const el = {
@@ -40,8 +59,15 @@ const el = {
   playerName: document.querySelector("#player-name"),
   joinButton: document.querySelector("#join-button"),
   createButton: document.querySelector("#create-button"),
+  joinModeButton: document.querySelector("#join-mode-button"),
+  hostModeButton: document.querySelector("#host-mode-button"),
   roomTitle: document.querySelector("#room-title"),
   playerList: document.querySelector("#player-list"),
+  lobbyActions: document.querySelector("#lobby-actions"),
+  appearancePreview: document.querySelector("#appearance-preview"),
+  helpButton: document.querySelector("#game-help-button"),
+  helpDialog: document.querySelector("#game-help-dialog"),
+  roleDialog: document.querySelector("#role-help-dialog"),
   playerCount: document.querySelector("#player-count"),
   readyCount: document.querySelector("#ready-count"),
   selfStatus: document.querySelector("#self-status"),
@@ -77,7 +103,17 @@ const el = {
   hunterShoot: document.querySelector("#hunter-shoot"),
   hunterPass: document.querySelector("#hunter-pass"),
   hunterStatus: document.querySelector("#hunter-status"),
-  nightWaitingPanel: document.querySelector("#night-waiting-panel")
+  nightWaitingPanel: document.querySelector("#night-waiting-panel"),
+  daySection: document.querySelector("#day-section"),
+  chatMessages: document.querySelector("#chat-messages"),
+  chatForm: document.querySelector("#chat-form"),
+  chatInput: document.querySelector("#chat-input"),
+  chatSubmit: document.querySelector("#chat-submit"),
+  chatStatus: document.querySelector("#chat-status"),
+  resultSection: document.querySelector("#result-section"),
+  resultTitle: document.querySelector("#result-title"),
+  resultMessage: document.querySelector("#result-message"),
+  revealedRoleList: document.querySelector("#revealed-role-list")
 };
 
 const roleNames = {
@@ -98,11 +134,151 @@ const roleDescriptions = {
   Hunter: "Nếu bị loại, bạn có thể bắn một người hoặc bỏ lượt khi Server cấp quyền."
 };
 
+const roleHelp = {
+  Werewolf: "Mỗi đêm chọn một người phe Dân còn sống. Mục tiêu có nhiều phiếu Sói nhất và không hòa sẽ bị cắn; ví dụ A–A–B thì chọn A. Hòa hoặc không có phiếu thì không ai bị cắn.",
+  Seer: "Mỗi đêm soi một người còn sống khác mình. Bạn chỉ nhận kết quả riêng về phe Sói hoặc phe Dân, không biết vai cụ thể.",
+  Guard: "Mỗi đêm bảo vệ một người còn sống, có thể là bản thân. Không chọn cùng người hai đêm liên tiếp. Chỉ chặn Sói cắn.",
+  Witch: "Mỗi đêm chọn một việc: cứu nạn nhân Sói nếu có, đầu độc một người còn sống khác mình, hoặc bỏ qua. Mỗi loại thuốc dùng tối đa một lần trong cả ván.",
+  Hunter: "Khi chết, bạn có thể bắn một người khác còn sống hoặc bỏ qua. Hết thời gian mà chưa chọn sẽ tự bỏ qua.",
+  Villager: "Bạn không có kỹ năng ban đêm. Khi còn sống, hãy thảo luận ban ngày và bỏ phiếu cho người khác còn sống."
+};
+
+const appearanceIds = ["appearance-hair", "appearance-hair-color", "appearance-skin", "appearance-outfit", "appearance-accessory"];
+const defaultAppearance = {hair: "messy", hairColor: "#1E293B", skin: "#FDE2D0", outfit: "#1E1B4B", accessory: "none"};
+
+function readAppearance() {
+  return {
+    hair: document.getElementById("appearance-hair").value,
+    hairColor: document.getElementById("appearance-hair-color").value,
+    skin: document.getElementById("appearance-skin").value,
+    outfit: document.getElementById("appearance-outfit").value,
+    accessory: document.getElementById("appearance-accessory").value
+  };
+}
+
+function makeAvatar(appearance, avatarId = "preview") {
+  const avatar = document.createElement("div");
+  avatar.className = "dashboard-avatar";
+  avatar.innerHTML = generateAvatarSvg(avatarId, {
+    hairStyle: appearance.hair,
+    hairColor: appearance.hairColor,
+    skinColor: appearance.skin,
+    clothingColor: appearance.outfit,
+    accessory: appearance.accessory
+  });
+  return avatar;
+}
+
+function renderAppearancePreview() {
+  el.appearancePreview.replaceChildren(makeAvatar(readAppearance()));
+}
+
+function saveAppearance() {
+  state.appearance = readAppearance();
+  try {
+    localStorage.setItem("werewolf-appearance", JSON.stringify(state.appearance));
+  } catch { /* Trình duyệt có thể chặn lưu trữ ở file://; vẫn cho vào phòng. */ }
+}
+
+function renderDashboardPlayers() {
+  el.playerList.replaceChildren();
+  const outfits = ["#1E1B4B", "#1E3A8A", "#064E3B", "#701A75", "#881337", "#0F172A"];
+  const hairstyles = ["messy", "spiky", "curly", "bob", "long", "ponytail"];
+  const accessories = ["none", "cat_ears", "flower_crown", "straw_hat", "halo", "sunglasses"];
+  for (let slot = 0; slot < 9; slot += 1) {
+    const player = state.players[slot];
+    const item = document.createElement("li");
+    item.className = "dashboard-card";
+    if (!player) {
+      item.classList.add("is-empty");
+      item.textContent = `Ô ${slot + 1} · Chờ người chơi`;
+      el.playerList.appendChild(item);
+      continue;
+    }
+
+    const isMe = player.playerId === state.selfPlayerId;
+    const isHost = player.playerId === state.hostPlayerId;
+    const isDead = player.alive === false;
+    if (isMe) item.classList.add("is-me");
+    if (isDead) item.classList.add("is-dead");
+    if (state.phase === "Lobby" && player.ready) item.classList.add("is-ready");
+
+    const name = document.createElement("div");
+    name.className = "dashboard-card-name";
+    name.textContent = `${slot + 1} · ${player.displayName || "Người chơi"}${isHost ? " 👑" : ""}${isMe ? " · Bạn" : ""}`;
+    const appearance = isMe && state.appearance
+      ? state.appearance
+      : {...defaultAppearance, hair: hairstyles[slot % hairstyles.length],
+        outfit: outfits[slot % outfits.length], accessory: accessories[slot % accessories.length]};
+    const avatar = makeAvatar(appearance, player.playerId);
+    const footer = document.createElement("div");
+    footer.className = "dashboard-card-footer";
+    footer.textContent = isDead ? "✕ Đã bị loại"
+      : state.phase === "Lobby" ? (player.ready ? "✓ Sẵn sàng" : "Chưa sẵn sàng")
+      : "Đang chơi";
+    item.append(name, avatar, footer);
+
+    if (isMe && state.phase !== "Lobby" && state.selfRole) {
+      const role = document.createElement("div");
+      role.className = "dashboard-own-role";
+      role.textContent = roleNames[state.selfRole] || state.selfRole;
+      const help = document.createElement("button");
+      help.type = "button";
+      help.className = "dashboard-ability-button";
+      help.textContent = "Khả năng của tôi";
+      help.addEventListener("click", () => {
+        document.getElementById("role-help-title").textContent = role.textContent;
+        document.getElementById("role-help-text").textContent = roleHelp[state.selfRole] || "Chưa có hướng dẫn.";
+        el.roleDialog.showModal();
+      });
+      item.append(role, help);
+    }
+    el.playerList.appendChild(item);
+  }
+}
+
 // Các phần tử mới độc lập với bố cục phòng chờ đã có của nhóm.
 const voteEl = Object.fromEntries([
   "voting-section", "voting-title", "voting-status", "vote-form",
-  "vote-target", "vote-button", "vote-result", "vote-tally", "vote-reveals"
+  "vote-target", "vote-button", "vote-result", "vote-tally", "vote-reveals",
+  "vote-clock", "vote-clock-value", "vote-clock-bar"
 ].map(id => [id, document.getElementById(id)]));
+
+function clearVoteClock() {
+  if (voteClockInterval !== null) clearInterval(voteClockInterval);
+  voteClockInterval = null;
+  voting.clockDay = null;
+  voting.deadlineMs = null;
+}
+
+function renderVoteClock() {
+  const visible = state.phase === "Voting" && !voting.resolved && voting.deadlineMs !== null;
+  voteEl["vote-clock"].hidden = !visible;
+  if (!visible) return;
+  const remaining = Math.max(0, voting.deadlineMs - Date.now());
+  const seconds = Math.ceil(remaining / 1000);
+  voteEl["vote-clock-value"].textContent = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  voteEl["vote-clock-bar"].style.setProperty("width", `${remaining / VOTE_DURATION_MS * 100}%`);
+  voteEl["vote-clock"].classList.toggle("is-urgent", seconds <= 10);
+}
+
+function startVoteClock(day) {
+  if (voting.clockDay !== day || voting.deadlineMs === null) {
+    voting.clockDay = day;
+    voting.deadlineMs = Date.now() + VOTE_DURATION_MS;
+  }
+  if (voteClockInterval === null) {
+    voteClockInterval = setInterval(() => {
+      renderVoteClock();
+      if (Date.now() >= voting.deadlineMs) {
+        clearInterval(voteClockInterval);
+        voteClockInterval = null;
+        renderVoting();
+      }
+    }, 250);
+  }
+  renderVoteClock();
+}
 
 function playerLabel(pid) {
   return voting.players.find(p => p.playerId === pid)?.displayName || pid;
@@ -112,12 +288,14 @@ function playerLabel(pid) {
 function canChooseTarget() {
   const me = voting.players.find(p => p.playerId === state.selfPlayerId);
   return state.phase === "Voting" && !voting.resolved &&
-    !voting.hasVoted && me?.alive === true && !state.hunterPending;
+    !voting.hasVoted && me?.alive === true && !state.hunterPending &&
+    (voting.deadlineMs === null || Date.now() < voting.deadlineMs);
 }
 
 function renderVoting() {
   const active = state.selfPlayerId !== null && voting.phase !== "Lobby";
   voteEl["voting-section"].hidden = !active;
+  renderVoteClock();
   el.readyButton.hidden = active;
   el.leaveButton.disabled = active || !state.connected || state.pending !== null;
   if (!active) {
@@ -159,6 +337,7 @@ function renderVoting() {
     : voting.resolved ? "Đã khóa phiếu. Đang hoàn tất kết quả lượt chơi."
     : voting.phase !== "Voting" ? "Chưa đến thời gian bỏ phiếu."
     : !me?.alive ? "Bạn đã bị loại và chỉ có thể theo dõi."
+    : voting.deadlineMs !== null && Date.now() >= voting.deadlineMs ? "Đã hết 60 giây. Chờ Server chốt phiếu."
     : voting.hasVoted ? "Server đã nhận phiếu của bạn. Không thể đổi lựa chọn trong vòng này."
     : "Hãy chọn người bị nghi ngờ. Hòa cao nhất hoặc không có phiếu sẽ không loại ai.";
   voteEl["voting-status"].textContent = status;
@@ -207,9 +386,11 @@ function resetNightState() {
   state.hunterPending = false;
   state.hunterActionDone = false;
   state.hunterMessage = "";
+  state.chatMessages = [];
 }
 
 function resetRoomState() {
+  clearVoteClock();
   state.roomId = null;
   state.selfPlayerId = null;
   state.hostPlayerId = null;
@@ -217,7 +398,8 @@ function resetRoomState() {
   state.pending = null;
   resetNightState();
   Object.assign(voting, {phase: "Lobby", day: 0, players: [], hasVoted: false,
-    canShoot: false, resolved: false, result: null, tally: [], summary: "", reveals: []});
+    canShoot: false, resolved: false, result: null, tally: [], summary: "", reveals: [],
+    clockDay: null, deadlineMs: null});
 }
 
 function canStartGame() {
@@ -239,8 +421,12 @@ function renderLobby() {
   const inLobby = state.phase === "Lobby";
   const busy = state.pending !== null;
 
+  document.body.classList.toggle("in-room", inRoom);
+  document.body.classList.toggle("in-lobby", inRoom && inLobby);
   el.joinSection.hidden = inRoom;
-  el.lobbySection.hidden = !inRoom || !inLobby;
+  el.lobbySection.hidden = !inRoom;
+  el.lobbyActions.hidden = !inLobby;
+  el.startButton.hidden = !inLobby;
 
   el.joinButton.disabled = !state.connected || busy;
   el.createButton.disabled = !state.connected || busy;
@@ -255,7 +441,7 @@ function renderLobby() {
   el.createButton.textContent =
     state.pending?.type === "CreateRoom"
       ? "Đang tạo phòng..."
-      : "Tạo phòng";
+      : "Tạo phòng và làm Host";
 
   el.roomTitle.textContent = `Phòng ${state.roomId ?? ""}`;
   el.playerCount.textContent = `${state.players.length}/9 người`;
@@ -267,53 +453,7 @@ function renderLobby() {
   el.readyCount.textContent =
     `${readyCount}/${state.players.length} sẵn sàng`;
 
-  el.playerList.replaceChildren();
-
-  for (const player of state.players) {
-    const isMe = player.playerId === state.selfPlayerId;
-    const isHost = player.playerId === state.hostPlayerId;
-    const displayName = player.displayName || "Người chơi";
-
-    const item = document.createElement("li");
-    item.className = `player-card${isMe ? " is-me" : ""}`;
-
-    const avatar = document.createElement("span");
-    avatar.className = "player-avatar";
-    avatar.textContent =
-      displayName.trim().charAt(0).toLocaleUpperCase() || "?";
-
-    const info = document.createElement("span");
-    info.className = "player-info";
-
-    const name = document.createElement("span");
-    name.className = "player-name";
-    name.textContent = displayName;
-
-    const role = document.createElement("span");
-    role.className = "player-role";
-
-    if (isHost && isMe) {
-      role.textContent = "Host · Bạn";
-    } else if (isHost) {
-      role.textContent = "Host";
-    } else if (isMe) {
-      role.textContent = "Bạn";
-    } else {
-      role.textContent = "Thành viên";
-    }
-
-    const ready = document.createElement("span");
-    ready.className =
-      `ready-badge${player.ready ? " is-ready" : ""}`;
-
-    ready.textContent = player.ready
-      ? "Sẵn sàng"
-      : "Chưa sẵn sàng";
-
-    info.append(name, role);
-    item.append(avatar, info, ready);
-    el.playerList.appendChild(item);
-  }
+  if (inRoom) renderDashboardPlayers();
 
   const me = getSelfPlayer();
 
@@ -515,6 +655,54 @@ function render() {
   renderNight();
   renderVoting();
   renderHunter();
+  renderDay();
+  renderResult();
+}
+
+function renderDay() {
+  const isDay = state.selfPlayerId !== null && state.phase === "Day";
+  el.daySection.hidden = !isDay;
+  if (!isDay) return;
+
+  el.chatMessages.replaceChildren();
+  for (const chat of state.chatMessages) {
+    const line = document.createElement("p");
+    const author = document.createElement("strong");
+    author.textContent = `${getPlayerName(chat.playerId)}: `;
+    line.append(author, document.createTextNode(chat.message));
+    el.chatMessages.appendChild(line);
+  }
+
+  const canChat = getSelfPlayer()?.alive === true;
+  const busy = state.pending !== null;
+  el.chatInput.disabled = !state.connected || busy || !canChat;
+  el.chatSubmit.disabled = !state.connected || busy || !canChat || !el.chatInput.value.trim();
+  el.chatStatus.textContent = canChat
+    ? "Bạn có thể thảo luận ban ngày."
+    : "Bạn đã bị loại và chỉ có thể xem thảo luận.";
+}
+
+function renderResult() {
+  const isGameOver = state.selfPlayerId !== null && state.phase === "GameOver";
+  el.resultSection.hidden = !isGameOver;
+  if (!isGameOver) return;
+
+  const results = {
+    WinnerVillage: ["Dân Làng chiến thắng", "Phe Dân Làng đã loại hết Sói."],
+    WinnerWolves: ["Phe Sói chiến thắng", "Số Sói còn sống đã áp đảo Dân Làng."],
+    Draw: ["Ván chơi hòa", "Không còn người chơi nào sống sót."]
+  };
+  const [title, message] = results[state.gameResult] ||
+    ["Ván chơi kết thúc", "Server đã kết thúc ván chơi."];
+  el.resultTitle.textContent = title;
+  el.resultMessage.textContent = message;
+
+  el.revealedRoleList.replaceChildren();
+  for (const [playerId, info] of Object.entries(state.revealedRoles)) {
+    const item = document.createElement("p");
+    item.textContent = `${getPlayerName(playerId)} — ${roleNames[info.role] || info.role}`;
+    el.revealedRoleList.appendChild(item);
+  }
 }
 
 function sendCommand(type, fields = {}) {
@@ -593,6 +781,8 @@ function sendHunterAction(choice) {
 function handlePhaseChanged(phase) {
   const previousPhase = state.phase;
 
+  if (previousPhase === "Voting" && phase !== "Voting") clearVoteClock();
+
   // Đồng bộ một phase cho cả T05 và T06; xóa kết quả cũ khi bắt đầu Voting mới.
   if (phase === "Voting" && voting.phase !== "Voting") {
     voting.summary = "";
@@ -646,6 +836,7 @@ function handleServerMessage(message) {
         hasVoted: message.hasVoted, canShoot: message.canShoot,
         resolved: message.resolved, result: message.result
       });
+      if (message.phase === "Voting" && !message.resolved) startVoteClock(message.day);
       state.hunterPending = message.canShoot;
       if (message.canShoot) state.hunterActionDone = false;
       state.players = message.players.map(player => ({
@@ -654,12 +845,17 @@ function handleServerMessage(message) {
       break;
 
     case "ActionAccepted":
-      if (message.requestId === state.pending?.requestId) state.pending = null;
+      if (message.requestId === state.pending?.requestId) {
+        if (state.pending.type === "Chat") el.chatInput.value = "";
+        state.pending = null;
+      }
       break;
 
     case "VotingResolved":
       voting.tally = message.tally;
       voting.resolved = true;
+      if (voteClockInterval !== null) clearInterval(voteClockInterval);
+      voteClockInterval = null;
       voting.summary = message.targetId
         ? `${playerLabel(message.targetId)} có số phiếu cao nhất duy nhất. Đang xử lý kết quả.`
         : message.tally.length ? "Hòa phiếu cao nhất: không loại ai, không bỏ phiếu lại."
@@ -810,18 +1006,21 @@ function handleServerMessage(message) {
 
     case "GameFinished":
       if (message.roomId === state.roomId) {
+        clearVoteClock();
         state.phase = "GameOver";
         state.gameResult = message.result;
         state.pending = null;
 
-        const results = {
-          WinnerVillage: "Phe Dân Làng chiến thắng!",
-          WinnerWolves: "Phe Sói chiến thắng!",
-          Draw: "Ván chơi kết thúc hòa!"
-        };
+        state.error = "";
+      }
+      break;
 
-        state.error =
-          results[message.result] || "Ván chơi đã kết thúc.";
+    case "ChatMessage":
+      if (message.roomId === state.roomId) {
+        state.chatMessages.push({
+          playerId: message.playerId,
+          message: message.message
+        });
       }
       break;
 
@@ -876,13 +1075,29 @@ function readRoomForm() {
   return { roomId, playerName };
 }
 
+function switchEntranceMode(mode) {
+  state.entranceMode = mode;
+  const joining = mode === "join";
+  el.joinModeButton.classList.toggle("is-active", joining);
+  el.hostModeButton.classList.toggle("is-active", !joining);
+  el.joinModeButton.setAttribute("aria-pressed", String(joining));
+  el.hostModeButton.setAttribute("aria-pressed", String(!joining));
+  el.joinButton.hidden = !joining;
+  el.createButton.hidden = joining;
+}
+
+el.joinModeButton.addEventListener("click", () => switchEntranceMode("join"));
+el.hostModeButton.addEventListener("click", () => switchEntranceMode("host"));
+switchEntranceMode("join");
+
 el.joinForm.addEventListener("submit", event => {
   event.preventDefault();
 
   const fields = readRoomForm();
 
   if (fields) {
-    sendCommand("JoinGame", fields);
+    saveAppearance();
+    sendCommand(state.entranceMode === "host" ? "CreateRoom" : "JoinGame", fields);
   }
 });
 
@@ -890,9 +1105,39 @@ el.createButton.addEventListener("click", () => {
   const fields = readRoomForm();
 
   if (fields) {
+    saveAppearance();
     sendCommand("CreateRoom", fields);
   }
 });
+
+for (const id of appearanceIds) {
+  document.getElementById(id).addEventListener("change", renderAppearancePreview);
+}
+document.getElementById("appearance-random").addEventListener("click", () => {
+  for (const id of appearanceIds) {
+    const select = document.getElementById(id);
+    select.selectedIndex = Math.floor(Math.random() * select.options.length);
+  }
+  renderAppearancePreview();
+});
+try {
+  const saved = JSON.parse(localStorage.getItem("werewolf-appearance") || "null");
+  if (saved && typeof saved === "object") {
+    const values = [saved.hair, saved.hairColor, saved.skin, saved.outfit, saved.accessory];
+    appearanceIds.forEach((id, index) => {
+      const select = document.getElementById(id);
+      if ([...select.options].some(option => option.value === values[index])) {
+        select.value = values[index];
+      }
+    });
+  }
+} catch { /* Dữ liệu cũ không hợp lệ: dùng lựa chọn mặc định. */ }
+renderAppearancePreview();
+
+el.helpButton.addEventListener("click", () => el.helpDialog.showModal());
+for (const dialog of [el.helpDialog, el.roleDialog]) {
+  dialog.querySelector(".dialog-close").addEventListener("click", () => dialog.close());
+}
 
 el.readyButton.addEventListener("click", () => {
   const me = getSelfPlayer();
@@ -998,6 +1243,15 @@ el.hunterPass.addEventListener("click", () => {
   sendHunterAction({
     action: "HunterPass"
   });
+});
+
+el.chatInput.addEventListener("input", render);
+el.chatForm.addEventListener("submit", event => {
+  event.preventDefault();
+  const message = el.chatInput.value.trim();
+  if (state.phase === "Day" && getSelfPlayer()?.alive === true && message) {
+    sendCommand("Chat", { message });
+  }
 });
 
 socket = new WebSocket(WS_URL);

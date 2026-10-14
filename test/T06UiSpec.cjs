@@ -8,12 +8,23 @@ const vm = require('node:vm');
 
 function setup() {
   class Element {
-    constructor() { this.children = []; this.value = ''; this.dataset = {}; this.listeners = {}; }
-    replaceChildren() { this.children = []; this.value = ''; }
+    constructor() {
+      this.children = []; this.value = ''; this.dataset = {}; this.listeners = {}; this.attributes = {};
+      this.style = {setProperty() {}};
+      const classes = new Set();
+      this.classList = {
+        add(name) { classes.add(name); },
+        toggle(name, enabled) { if (enabled) classes.add(name); else classes.delete(name); },
+        contains(name) { return classes.has(name); }
+      };
+    }
+    replaceChildren(...children) { this.children = children; this.value = ''; }
     appendChild(child) { this.children.push(child); }
     append(...children) { this.children.push(...children); }
     addEventListener(type, handler) { this.listeners[type] = handler; }
+    setAttribute(name, value) { this.attributes[name] = value; }
     fire(type) { this.listeners[type]({preventDefault() {}}); }
+    querySelector() { return new Element(); }
   }
   const elements = new Map();
   // Mỗi selector phải tồn tại trong HTML thật; bắt lỗi mất panel hoặc trùng ID khi merge.
@@ -26,16 +37,25 @@ function setup() {
     return elements.get(id);
   };
   let connection;
+  let now = 1_000_000;
+  let nextIntervalId = 1;
+  const intervals = new Map();
   class Socket {
     static OPEN = 1;
     constructor() { this.readyState = 1; this.listeners = {}; this.sent = []; connection = this; }
     addEventListener(type, callback) { this.listeners[type] = callback; }
     send(data) { this.sent.push(JSON.parse(data)); }
   }
-  const context = vm.createContext({WebSocket: Socket, console, document: {
+  const context = vm.createContext({WebSocket: Socket, console,
+    Date: class extends Date { static now() { return now; } },
+    setInterval(callback) { const id = nextIntervalId++; intervals.set(id, callback); return id; },
+    clearInterval(id) { intervals.delete(id); },
+    localStorage: {getItem() { return null; }, setItem() {}}, document: {
+    body: new Element(),
     querySelector: selector => get(selector.slice(1)), getElementById: get,
     createElement: () => new Element()
   }});
+  vm.runInContext(readFileSync(join(__dirname, '../web/avatar.js'), 'utf8'), context);
   vm.runInContext(readFileSync(join(__dirname, '../web/app.js'), 'utf8'), context);
   const message = data => connection.listeners.message({data: JSON.stringify(data)});
   connection.listeners.open();
@@ -49,8 +69,48 @@ function setup() {
     players, hasVoted: false, canShoot: false, resolved: false, result: null, ...changes});
   snapshot();
   const choose = () => { get('vote-target').value = 'p2'; get('vote-target').fire('change'); };
-  return {get, connection, message, snapshot, choose};
+  const advance = ms => { now += ms; for (const callback of [...intervals.values()]) callback(); };
+  return {get, connection, message, snapshot, choose, advance};
 }
+
+test('Sao chớp độc lập và đồng hồ Voting 60 giây không reset khi có snapshot mới', () => {
+  const {get, snapshot, advance} = setup();
+  assert.equal(get('twinkling-stars').children.length, 32);
+  assert.equal(get('vote-clock-value').textContent, '01:00');
+  advance(15_000);
+  assert.equal(get('vote-clock-value').textContent, '00:45');
+  snapshot({hasVoted: true});
+  assert.equal(get('vote-clock-value').textContent, '00:45');
+  advance(45_000);
+  assert.equal(get('vote-clock-value').textContent, '00:00');
+  assert.equal(get('vote-button').disabled, true);
+});
+
+test('Dashboard có 9 ô từ snapshot thật và chỉ ô của mình hiện vai riêng', () => {
+  const {get, message} = setup();
+  assert.match(get('appearance-preview').children[0].innerHTML, /avatar-chibi-svg/);
+  const grid = get('player-list');
+  assert.equal(grid.children.length, 9);
+  assert.equal(grid.children[0].classList.contains('is-me'), true);
+  assert.equal(grid.children[2].classList.contains('is-dead'), true);
+  assert.equal(grid.children[8].classList.contains('is-empty'), true);
+  message({type: 'YourRole', roomId: 'R', role: 'Seer'});
+  assert.equal(grid.children[0].children.some(child => child.textContent === 'Tiên Tri'), true);
+  assert.equal(grid.children[1].children.some(child => child.textContent === 'Tiên Tri'), false);
+});
+
+test('Nút tạo phòng chuyển đúng chế độ và avatar dùng SVG từ folder UI', () => {
+  const {get} = setup();
+  const svg = get('appearance-preview').children[0].innerHTML;
+  assert.match(svg, /avatar-chibi-svg/);
+  assert.match(svg, /ellipse cx="40" cy="44"/);
+  get('host-mode-button').fire('click');
+  assert.equal(get('join-button').hidden, true);
+  assert.equal(get('create-button').hidden, false);
+  get('join-mode-button').fire('click');
+  assert.equal(get('join-button').hidden, false);
+  assert.equal(get('create-button').hidden, true);
+});
 
 test('Chỉ chọn người sống khác mình; chặn gửi lặp và chờ đúng request', () => {
   const {get, connection, message, snapshot, choose} = setup();

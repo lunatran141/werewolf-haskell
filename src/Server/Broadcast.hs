@@ -236,6 +236,9 @@ nightMessagesFor rid recipient events =
         PlayerEliminated pid ->
           Just (MsgPlayerEliminated rid pid)
 
-        -- Khong chuyen event khac chua co JSON contract.
+        ChatMessage playerId messageText ->
+          Just (MsgChatMessage rid playerId messageText)
+
+        -- Khong gui event chua co JSON Contract.
         _ ->
           Nothing

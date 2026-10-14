@@ -272,6 +272,9 @@ validateChat game actor message = do
   if all isSpace message
     then Left EmptyChat
     else Right ()
+  if length message > 300
+    then Left ChatTooLong
+    else Right ()
 
 validateHunterShot
   :: GameState

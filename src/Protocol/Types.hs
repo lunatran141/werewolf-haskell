@@ -38,6 +38,7 @@ data ClientMessage
   -- T06: Browser chỉ gửi targetId; PlayerId voter lấy từ session Server.
   | ClientVote RequestId RoomId String
   | ClientHunterAction RequestId RoomId NightChoice
+  | ClientChat RequestId RoomId String
   deriving (Eq, Show)
 
 -- Thong tin nguoi choi duoc phep hien thi trong Lobby.
@@ -89,6 +90,7 @@ data ServerMessage
   | MsgActionAccepted RequestId RoomId
   -- hasVoted/canShoot được tính riêng cho người nhận, không cho xem phiếu người khác.
   | MsgVotingSnapshot RoomId Phase Int [VotingPlayerView] Bool Bool Bool (Maybe GameResult)
+  | MsgChatMessage RoomId String String
   deriving (Eq, Show)
 
 -- Doc NightChoice ma khong tao orphan FromJSON instance.
@@ -261,6 +263,9 @@ instance FromJSON ClientMessage where
         choice <- parseHunterChoice choiceValue
         pure (ClientHunterAction requestId roomId choice)
 
+      "Chat" ->
+        ClientChat requestId roomId <$> obj .: "message"
+
       _ ->
         fail ("Loai command khong ho tro: " ++ messageType)
 
@@ -329,6 +334,14 @@ instance ToJSON ClientMessage where
           , "requestId" .= requestId
           , "roomId" .= roomId
           , "targetId" .= targetId
+          ]
+
+      ClientChat requestId roomId messageText ->
+        object
+          [ "type" .= ("Chat" :: String)
+          , "requestId" .= requestId
+          , "roomId" .= roomId
+          , "message" .= messageText
           ]
 
 -- PlayerView: FromJSON va ToJSON
@@ -461,6 +474,12 @@ instance FromJSON ServerMessage where
 
       "PlayerEliminated" ->
         MsgPlayerEliminated <$> obj .: "roomId" <*> obj .: "playerId"
+
+      "ChatMessage" ->
+        MsgChatMessage
+          <$> obj .: "roomId"
+          <*> obj .: "playerId"
+          <*> obj .: "message"
 
       _ ->
         fail ("Loai server message khong ho tro: " ++ messageType)
@@ -613,4 +632,12 @@ instance ToJSON ServerMessage where
           [ "type" .= ("PlayerEliminated" :: String)
           , "roomId" .= roomId
           , "playerId" .= playerId
+          ]
+
+      MsgChatMessage roomId playerId messageText ->
+        object
+          [ "type" .= ("ChatMessage" :: String)
+          , "roomId" .= roomId
+          , "playerId" .= playerId
+          , "message" .= messageText
           ]

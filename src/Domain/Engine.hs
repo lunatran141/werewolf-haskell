@@ -20,6 +20,7 @@ import Domain.Validation
   , validatePlayerAlive
   , validatePlayerExists
   , validateVote
+  , normalizePlayerName
   )
 -- Them nguoi choi vao Lobby.
 -- PlayerId do Server cap; validateJoin tao Player voi ten da chuan hoa.
@@ -98,6 +99,16 @@ applyLobbyCommand state command =
     Leave pid           -> leavePlayer state pid
     SetReady pid ready  -> setPlayerReady state pid ready
     _                   -> Left InvalidCommand
+
+-- T07: Chat ban ngay la transition thuan tuy, khong thay doi GameState.
+applyChatCommand
+  :: GameState
+  -> Command
+  -> Either GameError (GameState, [DomainEvent])
+applyChatCommand state command =
+  case command of
+    Chat actor message -> sendChat state actor message
+    _ -> Left InvalidCommand
 -- Bat dau van bang danh sach vai da duoc Server xao tron.
 -- Ham nay khong tu random va khong gui WebSocket.
 startGame
@@ -547,8 +558,7 @@ sendChat
   -> Either GameError (GameState, [DomainEvent])
 sendChat state actor message = do
   validateChat state actor message
-  validateGameInvariant state
-  pure (state, [ChatMessage actor message])
+  pure (state, [ChatMessage actor (normalizePlayerName message)])
 
 markDead :: PlayerId -> [Player] -> [Player]
 markDead targetId = map mark
