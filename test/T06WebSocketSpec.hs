@@ -48,7 +48,7 @@ enterVoting :: RoomRuntime -> PlayerId -> PlayerId -> IO ()
 enterVoting room first second = do
   let ids = [first, second] ++ ["fixture" ++ show n | n <- [3 :: Int .. 8]]
       roles = [Werewolf, Hunter, Werewolf, Seer, Guard, Witch, Villager, Villager]
-      lobby = emptyLobby {gamePlayers = [Player pid pid Nothing True Alive | pid <- ids], gameHost = first}
+      lobby = emptyLobby {gamePlayers = [Player pid pid Nothing True Alive defaultAppearance | pid <- ids], gameHost = first}
       prepared = do
         (night, _) <- startGame lobby first roles
         (locked, _) <- closeWolfVoting night True
@@ -222,7 +222,7 @@ main = do
           void (receiveUntil one (== MsgVotingResolved "EMPTY" [] Nothing))
           void (receiveUntil one (== MsgPhaseChanged "EMPTY" Night))
 
-      it "Hunter gửi lựa chọn qua socket rồi mới reveal và đổi phase" $
+      it "Hunter gửi lựa chọn qua socket rồi công khai người chết và đổi phase" $
         withPlayers registry "HUNTER" $ \_ one two _ hunter -> do
           send one (ClientVote "v" "HUNTER" hunter)
           void (receiveUntil two (== MsgHunterShotPending "HUNTER"))
@@ -230,7 +230,8 @@ main = do
           expectReject one "fake" "HunterNotPending"
           send two (ClientHunterAction "shot" "HUNTER" (HunterShot "fixture3"))
           void (receiveUntil two (== MsgActionAccepted "shot" "HUNTER"))
-          void (receiveUntil one (== MsgPlayerRoleRevealed "HUNTER" "fixture3" Werewolf Wolves))
+          -- Khi chua GameOver, T02 chi cho cong khai PlayerId cua nguoi chet.
+          void (receiveUntil one (== MsgPlayerDied "HUNTER" "fixture3"))
           void (receiveUntil one (== MsgPhaseChanged "HUNTER" Night))
 
       it "Hunter không trả lời thì timeout bỏ qua phát bắn" $
