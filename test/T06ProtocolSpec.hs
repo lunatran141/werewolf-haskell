@@ -53,7 +53,7 @@ main = hspec $ do
     it "Snapshot khong lo phieu hay quyen Hunter cua nguoi khac" $ do
       let state = emptyLobby
             { gamePhase = Voting, gameDay = 1
-            , gamePlayers = [Player "p1" "Một" (Just Hunter) True Dead, Player "p2" "Hai" (Just Werewolf) True Alive]
+            , gamePlayers = [Player "p1" "Một" (Just Hunter) True Dead defaultAppearance, Player "p2" "Hai" (Just Werewolf) True Alive defaultAppearance]
             , gamePendingHunter = Just "p1", gamePendingReveals = ["p1"]
             , gameVotes = [("p1", "p2")], gameVotingResolved = True
             }
@@ -68,11 +68,14 @@ main = hspec $ do
       nightMessagesFor "ROOM-01" "p2" [event]
         `shouldBe` []
 
-    it "PlayerEliminated la public" $ do
-      let event = PlayerEliminated "p7"
-          expected = [MsgPlayerEliminated "ROOM-01" "p7"]
+    it "PlayerDied cong khai ID, khong cong khai vai khi van chua ket thuc" $ do
+      let event = PlayerDied "p7"
+          expected = [MsgPlayerDied "ROOM-01" "p7"]
       nightMessagesFor "ROOM-01" "p1" [event] `shouldBe` expected
       nightMessagesFor "ROOM-01" "p8" [event] `shouldBe` expected
+      -- Event cu khong duoc phep lam lo Role/Team cua nguoi da chet.
+      nightMessagesFor "ROOM-01" "p1" [PlayerRoleRevealed "p7" Villager Village]
+        `shouldBe` []
 
     it "Hunter prompt private va Hunter result public round-trip JSON" $ do
       let messages =
@@ -86,7 +89,7 @@ main = hspec $ do
     it "Vote va Hunter event giu dung visibility" $ do
       eventVisibility (VoteUpdated "p1" "p7") `shouldBe` Private "p1"
       eventVisibility (HunterShotPending "p6") `shouldBe` Private "p6"
-      eventVisibility (PlayerEliminated "p7") `shouldBe` Public
+      eventVisibility (PlayerDied "p7") `shouldBe` Public
 
 isLeft :: Either errorType value -> Bool
 isLeft result =
