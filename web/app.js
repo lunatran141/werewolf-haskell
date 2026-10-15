@@ -6,13 +6,14 @@ let voteClockInterval = null;
 
 function createTwinklingStars() {
   const layer = document.getElementById("twinkling-stars");
-  for (let i = 0; i < 32; i += 1) {
+  // Gần bằng mật độ hai lớp sao cũ trên màn hình desktop, nhưng mỗi sao chớp riêng.
+  for (let i = 0; i < 160; i += 1) {
     const star = document.createElement("span");
     star.style.setProperty("--star-x", `${2 + (i * 73.17) % 96}%`);
     star.style.setProperty("--star-y", `${3 + (i * i * 19.7 + i * 11.3) % 92}%`);
-    star.style.setProperty("--star-size", `${1.5 + i % 3}px`);
-    star.style.setProperty("--star-duration", `${2.2 + i % 5 * 0.65}s`);
-    star.style.setProperty("--star-delay", `${-i * 0.31}s`);
+    star.style.setProperty("--star-size", `${1 + i % 4 * 0.35}px`);
+    star.style.setProperty("--star-duration", `${1.8 + i % 7 * 0.32}s`);
+    star.style.setProperty("--star-delay", `${-i * 0.37}s`);
     layer.appendChild(star);
   }
 }

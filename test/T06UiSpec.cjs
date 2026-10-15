@@ -75,7 +75,7 @@ function setup() {
 
 test('Sao chớp độc lập và đồng hồ Voting 60 giây không reset khi có snapshot mới', () => {
   const {get, snapshot, advance} = setup();
-  assert.equal(get('twinkling-stars').children.length, 32);
+  assert.equal(get('twinkling-stars').children.length, 160);
   assert.equal(get('vote-clock-value').textContent, '01:00');
   advance(15_000);
   assert.equal(get('vote-clock-value').textContent, '00:45');

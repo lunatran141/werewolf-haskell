@@ -71,17 +71,7 @@ body {
     var(--background);
 }
 
-/* Các lớp sao nằm sau nội dung và không chặn thao tác bấm. */
-body::before,
-body::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background-repeat: repeat;
-}
-
+/* Giữ nền sao dày như trước; từng chấm chớp riêng và không chặn thao tác. */
 .twinkling-stars { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
 .twinkling-stars span {
   position: absolute;
@@ -91,39 +81,15 @@ body::after {
   height: var(--star-size);
   border-radius: 50%;
   background: #fff;
-  box-shadow: 0 0 7px 2px rgba(210, 216, 255, 0.65);
-  animation: star-blink var(--star-duration) ease-in-out var(--star-delay) infinite alternate;
+  animation: star-blink var(--star-duration) ease-in-out var(--star-delay) infinite;
 }
-.twinkling-stars span:nth-child(3n) { background: #b9dfff; box-shadow: 0 0 10px 3px rgba(95, 184, 255, 0.55); }
-.twinkling-stars span:nth-child(5n) { background: #f7d7ff; box-shadow: 0 0 10px 3px rgba(220, 151, 255, 0.55); }
+.twinkling-stars span:nth-child(3n) { background: #b9dfff; }
+.twinkling-stars span:nth-child(5n) { background: #f7d7ff; }
+.twinkling-stars span:nth-child(9n) { box-shadow: 0 0 8px 2px rgba(180, 205, 255, 0.55); }
 @keyframes star-blink {
-  0%, 17% { opacity: 0.12; transform: scale(0.55); }
-  55% { opacity: 0.95; transform: scale(1.4); }
-  100% { opacity: 0.3; transform: scale(0.75); }
-}
-
-body::before {
-  background-image:
-    radial-gradient(2px 2px at 25px 40px, #fff 98%, transparent),
-    radial-gradient(1px 1px at 130px 90px, #fff 98%, transparent),
-    radial-gradient(2px 2px at 240px 180px, #b8dbff 98%, transparent),
-    radial-gradient(1px 1px at 310px 35px, #fff 98%, transparent);
-  background-size: 360px 260px;
-  animation: star-twinkle 3s ease-in-out infinite alternate;
-}
-
-body::after {
-  background-image:
-    radial-gradient(1px 1px at 70px 170px, #fff 98%, transparent),
-    radial-gradient(2px 2px at 180px 25px, #f5dbff 98%, transparent),
-    radial-gradient(1px 1px at 290px 125px, #fff 98%, transparent);
-  background-size: 330px 230px;
-  animation: star-twinkle 5s ease-in-out infinite alternate-reverse;
-}
-
-@keyframes star-twinkle {
-  from { opacity: 0.25; }
-  to { opacity: 0.9; }
+  0%, 100% { opacity: 0.08; transform: scale(0.55); }
+  42% { opacity: 1; transform: scale(1.65); }
+  60% { opacity: 0.85; transform: scale(1.25); }
 }
 
 .lobby-page {
@@ -703,6 +669,7 @@ body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
 }
 
 @media (max-width: 460px) {
+  .twinkling-stars span:nth-child(n+81) { display: none; }
   .player-list { gap: 5px; }
   .dashboard-card { padding: 4px; border-radius: 9px; }
   .dashboard-card-name { font-size: 9px; padding: 2px 3px; }
@@ -753,8 +720,6 @@ body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
 
 /* Giảm chuyển động nếu người dùng đã chọn trong hệ điều hành. */
 @media (prefers-reduced-motion: reduce) {
-  body::before,
-  body::after,
   .intro-panel::before,
   .twinkling-stars span,
   .vote-clock.is-urgent strong {
