@@ -17,11 +17,12 @@
 | GRD | Guard | [L] | Tự bảo vệ được; không trùng mục tiêu hai đêm liên tiếp; chỉ chặn Sói |
 | WIT | Witch | [L] | Heal hoặc Poison hoặc Pass; mỗi bình một lần; Heal chỉ chặn Sói |
 | HUN | Hunter | [L] | Khi chết bất kỳ nguyên nhân, bắn tối đa một người; timeout bỏ qua; xét thắng sau bắn |
-| DAY | Day/Chat | [L], [S] | Chỉ người sống Chat trong Day, không rỗng; không thay đổi gameplay state |
+| DAY | Day/Chat | [L], [S] | Người sống chat `PublicDay` ở Day; Sói sống chat `WolvesNight` ở Night; không thay đổi gameplay state |
 | VOT | Voting | [L] | Mỗi người một phiếu; không tự chọn; hòa/không phiếu = không loại, không vote lại |
 | WIN | Win/Draw | [L] | Không người sống = Draw; hết Sói = Village; Sói >= Dân = Wolves |
-| REV | Role Reveal | [T], [K] | PRIVATE khi sống; PUBLIC Role/Team khi chết sau toàn bộ death effects |
+| REV | Role Reveal | [L], [S] | Giữ bí mật Role/Team của mọi Player (kể cả Dead) đến `GameOver`; chỉ công khai trạng thái Dead |
 | ENG | Engine/Events | [S] | Pure `applyCommand`, `Either GameError`, privacy, idempotency, concurrency, replay |
+| UI | Dashboard/Appearance/Ability/Chat UX | [L], [S] | Dashboard 3×3 xuyên pha, ngoại hình công khai, ability riêng tư, mục tiêu hợp lệ, chat lịch sử, bubble và hướng dẫn |
 
 ## 2. Preset người chơi — CFG
 
@@ -79,7 +80,7 @@ Voting --(resolve + all deaths/Hunter + checkWin=Just result)--> GameOver
 - **NGT-02 [P]:** Mỗi role-action chỉ được **chấp nhận một lần trong một đêm**; không sửa lựa chọn bằng request khác. Sói mỗi người một vote; Seer/Guard/Witch mỗi người một action (Witch chọn **một** trong Heal, Poison, Pass). Lệnh trùng requestId phải idempotent theo §14, không tính lại.
 - **NGT-03 [P]:** Không gửi đúng hạn = abstain/pass, **không** tự giết ai, không tiêu potion, không thay target trước đó; countdown cấu hình bên Server. Người vừa mất mạng **không** chuyển Dead.
 - **NGT-04 [P]:** Snapshot chọn target là người sống **ở đầu Night**; mọi vote/action hợp lệ được resolve đồng thời theo thuật toán §10, nên chết do đêm không làm action hợp lệ đã gửi biến mất; Hunter shot là hậu hiệu ứng.
-- **NGT-05 [S]:** Action bí mật, chỉ gửi acknowledgment cho actor. Không công bố target của Sói, Guard, Witch hay Seer cho tất cả.
+- **NGT-05 [S]:** Action bí mật, chỉ gửi acknowledgment cho actor. Không công bố target của Sói, Guard, Witch hay Seer cho tất cả; riêng tiến độ chọn của Sói được gửi `TeamOnly` tới Sói còn sống trong cùng phòng, không gửi tới phe khác. Không tiết lộ hành động Seer/Guard/Witch.
 
 **Pattern cases:** Happy: Seer chọn Villager và nhận `Village` riêng. Error: dead actor, target ID sai, role sai → Left, không đổi state/event. Edge: disconnect trong Night → action trước đó vẫn tính; thiếu action → skip theo [P].
 
@@ -88,6 +89,7 @@ Voting --(resolve + all deaths/Hunter + checkWin=Just result)--> GameOver
 - **WOL-01 [L]:** Mỗi Werewolf còn sống gửi **tối đa một** lựa chọn một Player **Alive** thuộc **Village**, không bao giờ chọn chính mình hoặc Sói khác.
 - **WOL-02 [L]:** Tally chỉ phiếu Sói hợp lệ nhận đúng lượt; chỉ khi **một target có phiếu cao nhất duy nhất** mới có `wolfVictim`. Hòa cao nhất, hoặc không có phiếu: `wolfVictim = Nothing`.
 - **WOL-03 [L]:** Sói chết không được gửi vote.
+- **WOL-04 [L,S]:** Sói còn sống có kênh `WolvesNight` riêng trong Night để thảo luận và xem tiến độ bỏ phiếu. Thông tin đồng đội, chat và phiếu Sói không phát tới Village. `WolfVoteUpdated` (tiến độ, chỉ gửi TeamOnly) và `WolfTargetLocked` (thông báo chốt đúng người được phép biết) là contract đề xuất cho T02/T05/T08. **Không thay thuật toán WOL-02 thành đồng thuận 100%.** Khi mọi Sói sống đã vote có thể chốt sớm; nếu hết thời hạn, chỉ kiểm các phiếu hợp lệ đã nhận theo WOL-02.
 
 **Pattern cases:** Happy 9 người: W1→A, W2→A, W3→B ⇒ A; 8 người: W1→A, W2→A ⇒ A. Error: W1→W2 hoặc dead target ⇒ `InvalidTarget`; dead W1 vote ⇒ `DeadPlayer`. Edge: 8 người W1→A, W2→B ⇒ tie ⇒ Nothing; 9 người mỗi Sói chọn 1 người khác nhau ⇒ Nothing; chỉ còn 1 Sói ⇒ một phiếu hợp lệ quyết định nạn nhân; không phiếu ⇒ Nothing.
 
@@ -147,14 +149,17 @@ Voting --(resolve + all deaths/Hunter + checkWin=Just result)--> GameOver
 
 ## 12. Day, Chat và Voting — DAY / VOT
 
-### DAY — Chat
+### DAY — Chat (theo kênh)
 
-- **DAY-01 [L]:** Chỉ Alive player gửi `SendChat` **khi Phase = Day**. Text sau trim không được rỗng/whitespace-only.
-- **DAY-02 [L]:** Người Dead không chat vào kênh người sống. Không gửi Chat trong Lobby, Night, Voting hay GameOver.
-- **DAY-03 [L,S]:** Chat **không thay đổi gameplay GameState** (Phase, Alive, votes, roles, potions). Server có thể phát `ChatMessage` public; nếu cần chat history thì lưu ngoài Domain GameState [P].
-- **DAY-04 [S]:** Vào Day công bố danh sách người chết trong Night, **không** leak thông tin private. Day → Voting theo internal timer/transition của Server.
+- **DAY-01 [L,S]:** `PublicDay`: chỉ người **Alive** trong đúng phòng gửi tin khi `Phase = Day`; văn bản sau trim không rỗng. Tin hiển thị trong khung chat chung, được đánh dấu ngày tương ứng.
+- **DAY-02 [L,S]:** `WolvesNight`: chỉ người **Alive**, giữ vai Werewolf và thuộc đúng phòng gửi/nhận tin **khi `Phase = Night`**. Các vai khác, Sói đã chết, người ngoài phòng không được nhận nội dung hoặc lịch sử riêng của kênh Sói.
+- **DAY-03 [L,S]:** Người Dead không được gửi chat hoặc thực hiện action/vote thường; ngoài hai tổ hợp kênh–phase trên, `SendChat` bị từ chối. Chat không thay đổi gameplay GameState (phase, alive, votes, role, potions); lịch sử có thể lưu trong server-side chat store riêng với Domain GameState.
+- **DAY-04 [S,L]:** Khi bắt đầu mỗi Day, có mốc `Ngày N bắt đầu`; tin các ngày trước vẫn xem lại được. Reconnect/reload trong **cùng ván** phải khôi phục history theo phòng, kênh, thứ tự và quyền người nhận. Chat `PublicDay` và `WolvesNight` hiển thị và lưu tách biệt; không phát sót payload `WolvesNight` sang người không có quyền.
+- **DAY-05 [L,S]:** Event chat gồm định danh phòng, ngày, kênh, messageId, sequence, senderId, text (chi tiết ở T02/T07). Bong bóng tin trên ô người gửi chỉ là hiệu ứng giao diện 3–5 giây, có rút gọn tin dài; riêng bong bóng của Sói chỉ hiện với recipient được phép xem chat Sói. Tin luôn giữ trong history dù bong bóng biến mất.
+- **DAY-06 [K]:** Khôi phục chat qua reconnect trong khi tiến trình Server còn giữ state là yêu cầu bắt buộc. **Không mặc định bảo đảm** khôi phục qua lần Server tắt/khởi động lại nếu chưa có persistent storage (DB hoặc cơ chế bền vững tương đương); cần task riêng nếu muốn mức bảo đảm đó.
+- **DAY-07 [S]:** Vào Day chỉ công khai người chết bằng trạng thái Dead/ID theo REV, không lộ Role/Team. Day → Voting theo internal timer/transition của Server.
 
-**Pattern cases:** Happy: Alive A gửi `" nghi B "` trong Day ⇒ ChatMessage. Error: `"  \t "` ⇒ `EmptyChat`; Dead A chat ⇒ `DeadPlayer`; Night chat ⇒ `WrongPhase`. Edge: văn bản Unicode hợp lệ, whitespace-only không hợp lệ; server không chấp nhận role giả kèm payload.
+**Pattern cases:** Happy: Alive A gửi tin PublicDay trong Day; Werewolf Alive gửi WolvesNight trong Night, chỉ đồng đội hợp lệ nhận. Error: text whitespace ⇒ `EmptyChat`; Dead gửi chat ⇒ `DeadPlayer`; Villager truy cập WolvesNight ⇒ `NotAuthorized`; chọn sai phase/kênh ⇒ `WrongPhase`. Edge: Unicode; reconnect đúng room và cùng role nhận lại đúng lịch sử theo sequence; người ngoài phe không thấy chat Sói; chat nhiều ngày vẫn còn.
 
 ### VOT — Bỏ phiếu
 
@@ -232,7 +237,7 @@ Server cấp authenticated actor, clock/timer trigger, RNG role assignment và r
 5. Một Vote mỗi voter một Voting; một role-action mỗi Night [P]; Witch potion mỗi loại tối đa 1 lần toàn game.
 6. Guard không lặp target ở **hai Night sát nhau**; Guard không chặn poison/shot.
 7. Đã GameOver thì result cố định và không có gameplay transition; không có GameEnded lặp.
-8. Kết quả riêng/secret action và **Role của người còn sống** không được leak qua public event, snapshot hoặc log; ngoại lệ có chủ đích là **PUBLIC Role/Team của người đã chết** theo REV-02.
+8. Kết quả riêng/secret action và **Role/Team của tất cả Player (Alive hoặc Dead)** không được leak qua public event, snapshot, chat payload hoặc log **trước GameOver**. Ngoại lệ duy nhất là thông tin Team được phép trả riêng cho Seer và danh sách đồng đội Sói được phép nhận theo luật. Sau GameOver, công bố toàn bộ vai qua `GameRolesRevealed`.
 9. Khi pending Hunter Shot chưa resolve không có Winner/Draw kết luận sớm.
 10. STM/serial command commit giữ nguyên mọi invariant; replay cùng initial seed + chuỗi accepted commands/timer inputs ⇒ state/events bằng nhau.
 
@@ -240,58 +245,68 @@ Server cấp authenticated actor, clock/timer trigger, RNG role assignment và r
 
 ## 15. Domain Event, visibility, Protocol và Server contract
 
+`EventVisibility` phân thành `Public`, `Private recipientId` và `TeamOnly Wolves` (kiểm tra **room, phase, alive và vai thật tại Server**; không tin claim từ Browser). Các type/constructor cuối cùng do T02 và T08 thống nhất; tên dưới đây là contract mong đợi, không khẳng định đã có trong source.
+
 | Event / dữ liệu | Visibility | Ghi chú |
 |---|---|---|
-| `PlayerJoined`, `PlayerLeft`, `ReadyChanged`, `GameStarted`, `PhaseChanged` | Public | Không kèm Role bí mật |
-| `PrivateRoleAssigned` | Chính player | Dùng per-recipient payload, không broadcast rồi ẩn UI |
-| `PrivateSeerResult` | Chỉ Seer | Team, không công khai target kết quả |
-| `WitchVictimNotice` [P] | Chỉ Witch | Chỉ có thông tin đủ để chọn Heal; không lộ phiếu Sói |
-| `NightActionAccepted` | Chỉ actor | Không làm lộ target tới người khác |
-| `VoteUpdated` | Public, nội dung [P] | Tổng số người đã vote, **không** công bố phiếu cá nhân trước resolve [P] |
-| `PlayerEliminated`, `NightResolved` | Public | `PlayerEliminated` công bố ID, Role, Team, Dead **chỉ cho người đã chết** sau toàn bộ death effects; `NightResolved` không leak các lựa chọn đêm |
-| `HunterShotPrompt` | Chỉ Hunter | Pending shot là ngoại lệ cho Dead actor |
-| `ChatMessage`, `GameEnded` | Public | Chat text đã validate; `GameEnded` gồm Winner/Draw |
+| `PlayerJoined`, `PlayerLeft`, `ReadyChanged`, `GameStarted`, `PhaseChanged` | Public | Chỉ dữ liệu công khai: PlayerId, tên, Appearance, Ready/Alive; không kèm vai |
+| `PrivateRoleAssigned`, `YourRole`, `RoleAbilityInfo` | Private — chủ sở hữu | Có Role và mô tả khả năng; không phát qua event công khai |
+| `PrivateSeerResult` | Private — Seer | Chỉ Team được soi, không lộ Role cụ thể |
+| `WitchVictimNotice` | Private — Witch | Chỉ dữ liệu đủ Heal, không kèm danh sách phiếu Sói |
+| `NightActionAccepted` | Private — actor | Receipt riêng, không lộ hành động của vai khác |
+| `WolfVoteUpdated` | TeamOnly — Sói còn sống cùng phòng | Tiến độ lựa chọn, không public; payload tối thiểu, không rò bí mật vai khác |
+| `WolfTargetLocked` | TeamOnly — Sói còn sống (hoặc server-internal) | Kết quả khóa theo WOL-02, không phát mục tiêu sang Village |
+| `VoteUpdated` (ban ngày) | Public, nội dung [P] | Có thể phát tổng số phiếu, không lộ ai bầu ai trước resolve |
+| `PlayerDied` (`PlayerEliminated` tương thích) | Public | PlayerId, Dead và metadata công khai hợp lệ; **không có Role/Team** |
+| `NightResolved` | Internal / Public đã lọc | Không kèm target, Role, Team hay secret action chưa được phép công bố |
+| `HunterShotPrompt` | Private — Hunter pending | Ngoại lệ hành động của Dead Hunter |
+| `ChatMessage(PublicDay)` | Public — đúng phòng | Lưu lịch sử theo ngày; chỉ Alive gửi trong Day |
+| `ChatMessage(WolvesNight)` | TeamOnly — Sói được quyền | Chỉ Sói sống trong Night, history lọc theo quyền |
+| `GameEnded` | Public | Winner Village/Wolves hoặc Draw, không kết thúc khi Hunter pending |
+| `GameRolesRevealed` | Public — **chỉ GameOver** | Danh sách PlayerId → Role/Team thật cho **tất cả** người chơi, kể cả Dead |
 
-### 15.1. REV — Role Reveal / công khai vai khi chết (PUBLIC)
+### 15.1. REV — Trạng thái chết công khai, vai trò bí mật đến GameOver
 
-> **[T] Nguồn đối chiếu:** *The Werewolves of Miller’s Hollow*, luật cơ bản [R3]: người bị loại lật lá Role để mọi người biết; xem thêm [R1], [R2]. **[K] Quy ước kỹ thuật:** server gom thông báo reveal sau khi xử lý xong death effects của một batch. **Không phải điều khoản do leader trực tiếp chốt:** đây là phần bổ sung theo luật truyền thống, cần leader xác nhận khi review PR. Thay thế hoàn toàn đề xuất **PRIVATE khi chết** của bản dự thảo trước.
+> **[L,S] Ưu tiên yêu cầu Leader và Excel bổ sung (2026-10-14):** Không áp dụng thông lệ lật vai khi chết của luật Ma Sói truyền thống [R3]. Tất cả Role/Team vẫn là thông tin bí mật trong trận, bất kể player sống hay chết. Đây là thay đổi chính thức về **yêu cầu nghiệp vụ mới**, khác bản REV cũ.
 
-- **REV-01 [T]:** Trước khi chết, `Role` và `Team` của Player là **PRIVATE** theo cơ chế phân quyền; người sống khác không được truy vấn vai bí mật (ngoại trừ Seer biết Team được phép và Wolves biết đồng đội theo P15).
-- **REV-02 [T]:** Bất cứ Player nào chuyển `Alive -> Dead` do Werewolf Kill, Witch Poison, Voting hoặc Hunter Shot đều được **PUBLIC** `PlayerId`, `Role`, `Team`, `Dead`. Áp dụng như nhau cho game 8 và 9 người; không phân biệt phe, vai hoặc nguyên nhân chết.
-- **REV-03 [K]:** Trong một batch resolve (Night/Voting cùng các Hunter Shot liên quan), Server **xử lý toàn bộ death effects và pending Hunter trước**, sau đó phát `PlayerEliminated`/`RolesRevealed` PUBLIC cho từng Player vừa chết; mỗi người được reveal **đúng một lần**. Không gửi trước thông tin role của nạn nhân khi Hunter còn đang chờ bắn.
-- **REV-04 [S,K]:** Public event **chỉ** chứa vai của **người đã Dead** (và các dữ liệu public hợp lệ). Không bao giờ gửi nguyên `GameState`/roster đầy đủ gồm vai người sống cho mọi client. Server giữ nguyên role thực trong Domain kể cả khi đã reveal.
-- **REV-05 [K]:** Khi `GameOver`, công bố `Winner Village`, `Winner Wolves` hoặc `Draw`; snapshot kết thúc có thể liệt kê đầy đủ Role tất cả Player sau khi game đóng. Snapshot đang chơi/reconnect vẫn lọc vai người còn sống.
-- **REV-06 [K]:** `Role Reveal` là sự kiện **công bố thông tin**, không gây thêm lượt chết, không làm đổi số lượng Alive/Dead, không đổi Win Condition và không cho người chết thực hiện hành động.
+- **REV-01 [L]:** Sau phân vai, Role/Team và mô tả khả năng chỉ được gửi riêng cho chủ sở hữu; không công khai vai người khác trước GameOver. Quyền nhận Team soi của Seer và đồng đội Sói là ngoại lệ **riêng tư có giới hạn**, không biến Role thành public.
+- **REV-02 [L,S]:** Khi bất cứ Player nào chuyển `Alive -> Dead` vì Sói, Witch, Voting hoặc Hunter Shot, event công khai `PlayerDied` (hoặc alias tương thích) **chỉ** cho biết PlayerId, trạng thái Dead và thông tin công khai cần thiết. **Không được chứa `Role`, `Team`, dữ liệu kỹ năng hoặc nguyên nhân bí mật có thể tiết lộ vai.** UI làm tối ô và hiện dấu ✕.
+- **REV-03 [L,S]:** Trong resolve Night/Voting có Hunter pending, hoàn thành các death effects theo RES/HUN trước khi kết luận thắng; mỗi player chuyển Dead tối đa một lần và thông báo chết không lặp. Server được phép cập nhật trạng thái Dead hợp lệ nhưng **không** phát công khai vai khi chết.
+- **REV-04 [L]:** Public event, public player view, room snapshot, reconnect replay và log công khai trong trận **không** có Role/Team của player khác, kể cả Dead. Trước GameOver không cung cấp danh sách full GameState có role. Client chỉ được thấy Role của mình và thông tin private đã được cấp quyền.
+- **REV-05 [L,S]:** Khi `GameOver` đã được xác nhận sau toàn bộ Hunter effects, bắt buộc công bố Winner/Draw và phát `GameRolesRevealed` gồm **đầy đủ danh sách vai thật của tất cả player**. GameOver snapshot/reconnect phải chứa thông tin này để người vào lại vẫn xem kết quả.
+- **REV-06 [K]:** `PlayerDied` và `GameRolesRevealed` là thông báo về trạng thái/thông tin, không gây thêm lượt chết, không hồi sinh, không làm thay đổi điều kiện thắng; không cho người Dead hành động thường.
 
 **Specification REV:**
 
 | Phần | Hợp đồng chính xác |
 |---|---|
-| Precondition | `phase ∈ {Night, Voting}` đang resolve một batch có ít nhất một `Alive -> Dead`; Hunter pending đã xử lý hoặc timeout xong |
-| Input | `newlyDead :: [PlayerId]` được engine tính từ trạng thái trước/sau batch (không lấy từ payload Client) |
-| Processing | Lọc distinct PlayerId, lấy role/team thật trong Server GameState, sinh thông điệp reveal PUBLIC theo thứ tự deterministic (ví dụ PlayerId tăng dần) |
-| Output | `PlayerEliminated {playerId, role, team, status=Dead}` hoặc tương đương public event; không gửi vai người sống |
-| Postcondition | Chỉ reveal Player Dead, mỗi lần chết đúng một event; state gameplay không đổi do thao tác reveal |
-| Error | Client đòi vai người Alive không đủ quyền => `NotAuthorized`; Client yêu cầu `RevealRole` thủ công => `NotAuthorized`; không phát public event khi validate fail |
+| Precondition (death) | Một Player chuyển Alive→Dead hợp lệ trong Night/Voting/Hunter processing |
+| Input | `newlyDead :: [PlayerId]`, tính từ trạng thái server-side; không tin Client |
+| Processing | Gộp distinct PlayerId, cập nhật LifeStatus và sinh `PlayerDied` public (không Role/Team); xử lý Hunter trước khi checkWin |
+| Output trước GameOver | `PlayerDied {playerId, status=Dead}`; public player views cập nhật Dead/✕ |
+| Output tại GameOver | `GameEnded` + `GameRolesRevealed {players: [{playerId, role, team}, ...]}` được định tuyến Public đúng thời điểm |
+| Postcondition | Không phát lặp death event; secrecy cho tất cả Role đến GameOver; reveal không mutate gameplay |
+| Error | Client xin Role người khác trước GameOver ⇒ `NotAuthorized`; không reveal thủ công từ Client |
 
 **Pattern Cases REV:**
 
 | Loại | Tình huống | Kết quả mong đợi |
 |---|---|---|
-| Happy | Seer bị Sói giết, không được cứu | Sang Day công khai `PlayerId, Seer, Village, Dead` |
-| Happy | Werewolf bị Vote loại | Sau resolve Voting công khai `Werewolf, Wolves, Dead` |
-| Happy | Witch Poison Villager | Public `Villager, Village, Dead`, không công khai ai đã Poison |
-| Edge | Hunter bị Vote, bắn Witch còn sống | Resolve cả hai cái chết, phát hai reveal PUBLIC, sau đó chốt Win/Draw |
-| Edge | Một Player đồng thời bị Sói tấn công và Poison | Chết/reveal **một lần**, không trùng event |
-| Edge | Guard cứu A khỏi Wolf Kill | A vẫn Alive, **không** reveal Role A |
-| Edge | GameOver do Hunter bắn Sói cuối cùng | Giải quyết bắn/reveal rồi mới GameEnded; kết quả theo ưu tiên Draw/Village/Wolves |
-| Error | Client đọc Role người còn sống khác trước GameOver | `NotAuthorized`; không leak qua snapshot/log/public event |
+| Happy | Seer bị Sói giết, không cứu | Sang Day người đó có ✕/Dead; **không** công khai Seer/Village |
+| Happy | Werewolf bị Vote loại | Public Dead/✕; **không** công khai Werewolf/Wolves |
+| Happy | Witch Poison Villager | Public Dead; không công khai Villager hoặc người dùng Poison |
+| Edge | Hunter bị Vote, bắn Witch | Hai người Dead riêng, không lộ vai; Hunter resolve xong mới checkWin |
+| Edge | Cùng một người bị 2 nguồn gây chết | Một `PlayerDied`, không trùng |
+| Edge | Guard cứu A khỏi Wolf Kill | A Alive, không có `PlayerDied` |
+| Edge | GameOver sau Hunter shot | Reveal **toàn bộ** role chỉ sau Hunter xử lý và GameOver |
+| Edge | Reconnect giữa trận sau khi một người chết | History, snapshot và event replay không chứa Role/Team người chết |
+| Error | Client đọc vai người khác trước GameOver | `NotAuthorized`; không leak qua event/chat/log |
 
-> **Comment cho reviewer:** Cần kiểm tra và cập nhật đồng bộ **P09**, bảng visibility, `PlayerEliminated`, snapshot/reconnect và các test privacy. `Public Event không chứa secret Role` vẫn đúng với **người còn sống**; Role người đã Dead nay là dữ liệu public có chủ đích theo [T].
+**Chỉ dẫn tích hợp:** T01 chốt quy tắc; T02 định nghĩa type/event; T05 điều chỉnh domain death/resolve; T08 định tuyến/ẩn payload; T10 render dấu ✕; T11/T12 kiểm thử privacy và reconnect.
 
 **[S] Protocol bắt buộc:** `type`, `requestId`, `gameId`, `gameVersion`; Domain events có `sequenceNumber`. Request trùng trong cùng session/game trả receipt trước hoặc `DuplicateRequest`, **không** nhân đôi action/death/event. Không dùng gameVersion do client tự khai để ghi đè state.
 
-**[S] Reconnect:** disconnect ≠ chết; Client `lastSequence` → server trả event còn thiếu hoặc permission-filtered snapshot, không tạo ID mới; không gửi bí mật người khác. Snapshot sau reconnect giữ nguyên vote đã nhận, potion đã tiêu và pending Hunter.
+**[S] Reconnect:** disconnect ≠ chết; Client `lastSequence` → server trả event còn thiếu hoặc permission-filtered snapshot, không tạo ID mới; không gửi bí mật người khác, bao gồm cả Role người đã chết trước GameOver và mọi chat Sói không đủ quyền. Snapshot sau reconnect giữ nguyên vote đã nhận, potion đã tiêu, pending Hunter và lịch sử chat cùng ván đúng phòng/kênh/ngày. GameOver snapshot phải có full reveal.
 
 **[S] Reliability:** `TVar GameState` + `atomically`/serialized GameLoop, `TQueue`/`TChan`, bounded queue/backpressure (`TBQueue`), supervision/cleanup, structured logs không chứa secret. Game server là authoritative; web client chỉ gửi intent. Domain pure, clock/RNG injected; event redaction và gửi tới đúng recipient tại server.
 
@@ -311,7 +326,7 @@ Server cấp authenticated actor, clock/timer trigger, RNG role assignment và r
 | P06 | Night có substage: Wolf votes đóng → xác định victim → chỉ Witch nhận private `wolfVictim` hoặc `None` → Witch chọn Heal/Poison/Pass | [T] nguyên lý Witch biết người bị Sói chọn; [K] substages | Không gửi danh tính nạn nhân cho toàn phòng; test Heal khi tie/None |
 | P07 | Guard không được bảo vệ cùng target ở **hai Night liền nhau**; nếu N2 Pass thì N3 được chọn lại target N1 | [T] không bảo vệ cùng người hai đêm liên tiếp; [K] semantics Pass | Vì N2 không có người được bảo vệ; test A/Pass/A hợp lệ |
 | P08 | Witch Heal chỉ cần có `wolfVictim` (trước block Guard), nếu đồng thời Guard bảo vệ nạn nhân và Witch vẫn xác nhận Heal thì vẫn dùng hết thuốc; không hồi thuốc | [K] | Hai bảo vệ độc lập, tránh hoàn tác kỹ năng đã dùng; test guard + heal |
-| P09 | **PUBLIC Role/Team của người đã chết sau toàn bộ Death Effects (gồm Hunter Shot)**, trước Day hoặc Night kế tiếp; **PRIVATE Role người đang sống** | [T] lật vai người bị loại, [K] định thời broadcast | Khác bản v3 đề xuất giấu Role tới GameOver; bảo đảm Hunter shot được xử lý trước win và reveal; test private role trước khi chết |
+| P09 | `PlayerDied` PUBLIC chỉ có ID/Dead; **không** tiết lộ Role/Team khi chết; `GameRolesRevealed` chỉ tại GameOver | [L] + [S] cập nhật | Kiểm privacy cả Dead/Alive, reconnect và Hunter; thay mặc định [T] cũ |
 | P10 | Chưa Vote tới hết hạn = abstain; không được đổi Vote; không ai Vote/hòa => không loại, không vote lại; thông tin phiếu cá nhân không public trước resolve | [L] hòa/không vote, [K] timeout/privacy | Bảo đảm không thể suy ngược lựa chọn cá nhân trước khi khóa |
 | P11 | Hunter được bắn ở **pending shot substage** của Night/Voting dù actor đã Dead; timeout skip; pending xử lý trước checkWin | [L] nguyên nhân và quyền bắn, [K] substage | Có thể bắn Sói cuối cùng và chuyển kết quả sang Village hoặc Draw |
 | P12 | Server điều khiển tick/transition. Cấu hình demo đề xuất: `Night action 90s`, `Witch decision 30s`, `Day 120s`, `Voting 60s`, `Hunter shot 30s`; cho phép cấu hình bằng settings (không hardcode Domain) | [K] | **Không phải thời gian từ sách**; test fake clock; thời hạn không tạo hành động tự động |
@@ -320,7 +335,7 @@ Server cấp authenticated actor, clock/timer trigger, RNG role assignment và r
 | P15 | Wolves nhận **danh sách Werewolf đồng đội qua private event khi Start**, không public; sói chết không nhận quyền action | [T] biết đồng đội, [K] event visibility | Test người thuộc Village không nhìn thấy wolves roster |
 | P16 | Không có Role ngoài 6 role preset, không có Cupid/Lovers, Mayor, Little Girl, tie revote hay special neutral faction | [L] + [K] scope MVP | Không kéo thêm luật của *The Pact* vào project |
 | P17 | Khi Night chỉ còn 1 Sói sống, 1 phiếu của Sói đó đủ quyết định victim; nếu không vote thì không cắn | [L] suy từ tally | Test cả 8/9 sau khi một số Sói chết |
-| P18 | `GameEnded` chứa Winner Village/Wolves hoặc Draw; PUBLIC vai người chết theo REV, các vai còn sống chỉ được công bố khi GameOver | [L] + [K] visibility | Không leak trong trận; snapshot reconnect lọc role theo recipient |
+| P18 | `GameEnded` công bố Winner/Draw và bắt buộc `GameRolesRevealed` cho **tất cả** Player ở GameOver; trước đó ẩn Role của cả Dead/Alive | [L] + [S] cập nhật | Snapshot/reconnect lọc theo recipient, GameOver mới full reveal |
 | P19 | Nếu tất cả player chết cùng thời điểm, `Draw` **ưu tiên tuyệt đối**; không chốt thắng giữa pending shot, dù tại một thời điểm tạm `wolvesAlive >= villageAlive` | [L] | Test Hunter chết cùng Sói cuối; cả hai bằng 0 sau shot |
 | P20 | Nếu Witch Heal đang được yêu cầu nhưng không có wolfVictim, trả `NoWolfVictim` và cho Witch tiếp tục chọn **một** hành động hợp lệ trong cửa sổ còn mở; action lỗi không tính lượt | [K] kết quả validation | Test invalid Heal → Poison (đúng cùng Night, nhưng chỉ Poison được chấp nhận) |
 
@@ -338,7 +353,7 @@ Server cấp authenticated actor, clock/timer trigger, RNG role assignment và r
 
 - **[R1]** Philippe des Pallières & Hervé Marly, *The Werewolves of Miller’s Hollow: The Pact* (rulebook, Asmodee). Trang giới thiệu và tải rulebook: https://www.asmodee.ca/en/product/werewolves-of-millers-hollow-the-the-pact/ ; bản PDF: https://cdn.svc.asmodee.net/production-asmodeeca/uploads/2023/07/WerewolvesThePact_EN_Rules.pdf . Dùng để tham khảo **hành động theo đêm, Seer, Defender, Witch, Hunter và việc loại người/chia thông tin**. Không lấy các phần vai mở rộng.
 - **[R2]** *The Werewolves of Miller’s Hollow* bản luật cơ bản, thư mục rulebook: https://en.1jour-1jeu.com/cardgame/2001-the-werewolves-of-millers-hollow/files . Đối chiếu mô hình Moderator điều phối Night/Day, Role ẩn và loại người.
-- **[R3]** *The Werewolves of Miller’s Hollow — Official Rulebook* (Zygomatic): https://www.zygomatic-games.com/wp-content/uploads/2020/04/werewolvesofmillershollow_en_rules_compressed.pdf ; phần công bố người bị loại và lật lá vai. Bản diễn giải dễ tra cứu: https://www.ultraboardgames.com/the-werewolves-of-millers-hollow/game-rules.php . **Nguồn chính cho REV PUBLIC khi chết.**
+- **[R3]** *The Werewolves of Miller’s Hollow — Official Rulebook* (Zygomatic): https://www.zygomatic-games.com/wp-content/uploads/2020/04/werewolvesofmillershollow_en_rules_compressed.pdf ; phần công bố người bị loại và lật lá vai. Bản diễn giải dễ tra cứu: https://www.ultraboardgames.com/the-werewolves-of-millers-hollow/game-rules.php . **Chỉ tham khảo luật truyền thống; dự án KHÔNG áp dụng công khai Role khi chết theo yêu cầu Leader mới.**
 - **[L]** Leader, "CHỐT LUẬT T01 – BẢN ĐƠN GIẢN", được gửi trực tiếp trong nhóm: **nguồn quyết định ưu tiên cao nhất**, không phải tài liệu trên web.
 - **[S]** Workbook `LTH_Đồ án Ma Sói.xlsx`, sheet `02 - WORKFLOW & TASK`, `03 - LUẬT & THIẾT KẾ`, `05 - TEST DEMO NỘP`: nguồn về kiến trúc, bảo mật, hợp đồng Domain và test.
 - **[K]** Quy ước kỹ thuật của project do người soạn bổ sung để loại bỏ ambiguity, **không trích dẫn sai thành luật dân gian**. Đặc biệt timeout, duplicate request, Host succession, chat storage, substage protocol và thời lượng là quyết định thiết kế cần nhóm thông qua trước khi merge.
@@ -381,7 +396,15 @@ Mọi thay đổi mặc định [T]/[K] phải ghi rõ `rule ID → lý do → �
 | T01-HUN-X2 | Edge | Hunter timeout | Skip, then checkWin |
 | T01-DAY-H1 | Happy | Alive Chat ở Day | ChatMessage, game state unchanged |
 | T01-DAY-E1 | Error | Chat chỉ whitespace | EmptyChat |
-| T01-DAY-X1 | Edge | Dead Chat hoặc Night Chat | DeadPlayer / WrongPhase |
+| T01-DAY-X1 | Edge | Dead Chat; Villager chat Night; Wolf Alive chat WolvesNight | DeadPlayer; WrongPhase/NotAuthorized; WolvesNight được phép cho Wolf Alive |
+| T01-CHAT-H2 | Happy | Wolf Alive gửi WolvesNight trong Night | Chỉ Wolves Alive được quyền nhận; không đổi gameplay state |
+| T01-CHAT-E2 | Error | Villager/Dead gửi hoặc đọc WolvesNight | `NotAuthorized` / `DeadPlayer`, không lộ history |
+| T01-CHAT-X2 | Edge | Tin PublicDay ngày 1/2, reconnect cùng game | Khôi phục đủ lịch sử đúng ngày/kênh/room, theo sequence |
+| T01-REV-H1 | Happy | Alive→Dead trong Night/Voting | Public `PlayerDied` ID/Dead; không chứa Role/Team |
+| T01-REV-H2 | Happy | GameOver sau Hunter | `GameRolesRevealed` đủ mọi Player, gồm Alive/Dead |
+| T01-REV-E1 | Error | Xin vai Dead trước GameOver | NotAuthorized, snapshot/replay không lộ |
+| T01-UI-H1 | Happy | 8 người, Dashboard 9 ô | 8 ô player + 1 ô `Đang chờ`, xuyên pha |
+| T01-UI-X1 | Edge | Chọn target bất hợp lệ trên UI/forged request | UI khóa/giải thích; server trả InvalidTarget, state không đổi |
 | T01-VOT-H1 | Happy | Một người cao phiếu duy nhất | Eliminated + hunter + win |
 | T01-VOT-E1 | Error | Vote 2 lần hoặc self-vote | AlreadyVoted / InvalidTarget |
 | T01-VOT-X1 | Edge | Hòa hoặc không phiếu | No elimination; no revote |
@@ -392,13 +415,13 @@ Mọi thay đổi mặc định [T]/[K] phải ghi rõ `rule ID → lý do → �
 | T01-ENG-H1 | Happy | Valid command | Right, state/events deterministic |
 | T01-ENG-E1 | Error | Invalid command | Left, no commit/events |
 | T01-ENG-X1 | Edge | 2 concurrent votes / duplicate requestId | No lost update / no duplicate effect |
-| T01-PRIV-X1 | Edge | Seer result, role assignment, witch notice | Private route; public/log không lộ vai **người còn sống**; Role người chết được PUBLIC theo REV |
+| T01-PRIV-X1 | Edge | Seer result, role assignment, witch notice, người chết | Private đúng recipient; public/reconnect **không** lộ Role/Team bất kỳ người nào trước GameOver |
 | T01-INT-H1 | Integration | 8 Player Join→Night→Day→Voting→Night | Phases/events consistent |
 | T01-INT-H2 | Integration | 9 Player, Hunter chain→Draw/GameOver | Correct priority/events/privacy |
 
 **[S] Mức test tối thiểu của toàn dự án theo Sheet `05 - TEST DEMO NỘP`:** ≥14 unit tests; ≥3 property tests × 100 samples; ≥2 integration tests. Ma trận trên rộng hơn mức tối thiểu để T01 có acceptance criteria theo từng rule; implement chủ yếu thuộc các task T02–T12.
 
-**Property đặc biệt:** (1) ID duy nhất; (2) accepted command giữ invariants; (3) command sai không commit; (4) một Player không chết hai lần; (5) role preset đúng 8/9; (6) public event không lộ secret của người sống nhưng reveal đúng role người chết; (7) replay cùng seed/commands/timer cho cùng outcome.
+**Property đặc biệt:** (1) ID duy nhất; (2) accepted command giữ invariants; (3) command sai không commit; (4) một Player không chết hai lần; (5) role preset đúng 8/9; (6) public event không lộ Role/Team của bất kỳ Player nào trước GameOver; GameOver reveal đủ 8/9 vai; (7) replay cùng seed/commands/timer cho cùng outcome.
 
 ## 18. Trace mẫu 8 người / 9 người và biến cố hiếm
 
@@ -424,3 +447,54 @@ Mọi thay đổi mặc định [T]/[K] phải ghi rõ `rule ID → lý do → �
 | T08–T12 | 14–18 | STM/server/frontend integration, replay, privacy, tests |
 
 **Review bắt buộc:** TV2 duyệt Protocol/Event, staged Witch notice, idempotency; TV5 duyệt testability, timeout/pending Hunter, happy/error/edge; leader phê duyệt các mặc định [T]/[K] ở mục 16. **Chỉ sau phê duyệt và cập nhật code/test tương ứng.**
+
+## 20. Yêu cầu giao diện và tích hợp bổ sung — UI / Dashboard / Chat / Privacy (14/10/2026)
+
+> **Phạm vi:** Mục này là hợp đồng nghiệp vụ/acceptance cho các task T02, T03, T05–T12. Không yêu cầu TV1 tự triển khai toàn bộ Frontend; owner từng module thực hiện theo Excel. **Không thay đổi** preset, khả năng vai, luật WOL-02, Voting ban ngày hay Win Condition.
+
+- **UI-01 [L,S] — Dashboard 3×3:** Sau khi tạo/tham gia phòng, Dashboard có **9 ô vuông** bố trí **3 hàng × 3 cột**; mỗi người một ô hiển thị tên, Appearance và trạng thái. Phòng 8 người có 1 ô `Đang chờ`. Dashboard duy trì xuyên Night, Day, Voting và GameOver, không dựng lại theo kiểu làm mất player context.
+- **UI-02 [L,S] — Appearance:** Chọn preset ngoại hình/trang phục **trước Join/Create**, Server xác minh preset hợp lệ và đồng bộ Appearance công khai qua roster/PlayerView cho cả phòng. Appearance không mã hóa Role và không cấp quyền game.
+- **UI-03 [L,S] — Role/Ability riêng:** Sau Start, chỉ chủ sở hữu thấy tên Role và nút `Khả năng của tôi` dưới ô của mình. Nút mở panel hướng dẫn **role làm gì, phase hành động, target hợp lệ, giới hạn sử dụng**, không tự gửi command. Mọi payload gửi cho người khác phải bỏ Role/Ability riêng.
+- **UI-04 [L,S] — Chọn mục tiêu tại ô:** Trong Night Action hoặc Voting, chỉ ô người Alive và target hợp lệ mới chọn được; ô không hợp lệ bị khóa và hiện lời giải thích ngắn. Người chơi xác nhận trước khi gửi; Server **kiểm tra lại** actor, phase, role, Alive, target và lượt/ability. Không dựa vào button disabled để đảm bảo an toàn.
+- **UI-05 [L,S] — Sói riêng tư:** Sói Alive dùng `WolvesNight` và xem tiến độ chọn của đồng đội theo WOL-02/WOL-04. Đóng vote khi đủ Sói sống hoặc hết cửa sổ vote, tally theo **phiếu cao nhất duy nhất**; ví dụ 3 Sói A–A–B ⇒ A; A–B–C ⇒ không cắn. Không gửi chat/tiến độ/target Sói cho Village.
+- **UI-06 [L,S] — Chat Day/history:** Khung chat chung bên **trái Dashboard**; Alive mới gửi `PublicDay` trong Day. Có mốc `Ngày N bắt đầu`, giữ lịch sử qua ngày và reconnect/reload trong cùng ván. History tách theo game/room/channel/day và sequence; không trộn PublicDay với WolvesNight.
+- **UI-07 [L,S] — Bubble:** Mỗi tin mới làm xuất hiện bong bóng trên ô người gửi **3–5 giây**, tin dài rút gọn; bong bóng biến mất không xóa tin trong chat history. Bong bóng WolvesNight chỉ được render cho recipient có quyền.
+- **UI-08 [L,S] — Dead state:** Khi Dead, ô tối và phủ ✕; không chat/vote/target theo luật (ngoại lệ pending Hunter Shot theo HUN). Trước GameOver chỉ công khai trạng thái chết, **không Role/Team**.
+- **UI-09 [L,S] — GameOver:** Hiển thị Winner Village/Wolves hoặc Draw, danh sách toàn bộ người chơi và Role thật; chỉ thực hiện full reveal tại GameOver, bao gồm reconnect/snapshot cuối trận.
+- **UI-10 [L,S] — Hướng dẫn:** Nút `?` hoặc `⋯` trên đầu màn hình mở bảng hướng dẫn Join/Create, thứ tự Night→Day→Voting, chọn target, điều kiện thắng, vai nói chung; không lộ danh tính–Role trong ván. Có nút đóng, hỗ trợ bàn phím và điện thoại.
+
+### 20.1. Data contracts cần chốt theo task
+
+| Contract | Nội dung tối thiểu | Owner triển khai/tiêu thụ |
+|---|---|---|
+| `Appearance` | Preset ID/giá trị trong allowlist, đồng bộ public | T02 → T03/T10 |
+| `PlayerView` public | playerId, displayName, ready, alive/dead, appearance; **không role/team** | T02 → T03/T08/T10 |
+| `RoleAbilityInfo` | Role và mô tả riêng cho chủ sở hữu | T02/T07 → T10 |
+| Valid targets | List/điều kiện cho actor+phase+action; Server revalidate | T05/T02 → T08/T10 |
+| `ChatChannel`, `ChatRecord` | `PublicDay`/`WolvesNight`, roomId, day, channel, messageId, sequence, senderId, text | T02/T07 → T08/T09/T10 |
+| `EventVisibility` | `Public`, `Private`, `TeamOnly`; Server-side recipient filter | T02 → T08 |
+| Death/reveal | `PlayerDied` trước GameOver; `GameRolesRevealed` chỉ GameOver | T02/T05/T06 → T08/T10 |
+| Wolf progress | `WolfVoteUpdated`/`WolfTargetLocked` TeamOnly | T05 → T08/T10 |
+
+### 20.2. Ranh giới triển khai và xác nhận
+
+1. **TV1 (T01/T02/T05):** Chốt luật/Domain ADTs, validation, night target/vote contract, không reveal trước GameOver; bổ sung unit tests phần thuộc sở hữu.
+2. **TV2 (T08/T12):** STM, WebSocket routing, permission-filtered snapshot/replay, broadcast đúng Public/Private/TeamOnly; phối hợp tích hợp.
+3. **TV3 (T03/T10):** Dashboard 9 ô, preset Appearance, Role button, target-selection UI, Dead overlay, responsive.
+4. **TV4 (T07):** Chat protocol/lịch sử/phân quyền, guide/FAQ theo task phân công.
+5. **TV5 (T06/T09/T11):** Voting/Hunter, reconnect và bộ test hội nhập theo phân công.
+6. **Trạng thái triển khai:** Nội dung mục 20 là **đặc tả**, không phải bằng chứng source đã có đầy đủ. Mọi thay đổi Domain Event/JSON contract cần được đồng bộ qua PR và giữ compatibility hoặc cập nhật tất cả consumer/test cùng lúc.
+
+### 20.3. Kiểm thử nghiệm thu bổ sung
+
+- 8 người ⇒ 9 ô, 1 ô `Đang chờ`; 9 người ⇒ đủ 9 ô; dashboard không biến mất khi đổi phase.
+- Appearance bất hợp lệ bị từ chối; preset hợp lệ hiển thị giống nhau trên mọi client.
+- Browser A không nhận Role/Ability của B trước GameOver, kể cả khi B đã chết hoặc A reconnect.
+- Nhấn `Khả năng của tôi` không tạo Domain action; Server từ chối forged target.
+- Sói A–A–B ⇒ A; A–B–C ⇒ không có wolfVictim; WolfsOnly history/progress không rò ra Village.
+- Alive PublicDay chat hợp lệ; Dead/Villager trong WolvesNight bị từ chối; history giữ qua Day 1/2/reconnect cùng ván.
+- Bubble tự ẩn sau 3–5 giây; record vẫn còn trong chat; bubble sói không xuất hiện bên ngoài phe.
+- Night/Voting/Hunter Death ⇒ public chỉ ID/Dead, không Role; GameOver reveal **đủ** 8/9 role.
+- Guide mở/đóng bằng click và bàn phím, dùng được trên mobile, không lộ dữ liệu vai hiện tại.
+
+**Thay đổi so với bản luật trước:** bỏ quy tắc [T] lật vai người chết; thêm hai kênh chat; mở rộng event visibility; giữ nguyên luật Sói theo Excel; thêm đặc tả Dashboard/UI để T02–T12 triển khai và kiểm thử thống nhất.

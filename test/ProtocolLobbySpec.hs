@@ -10,6 +10,8 @@ import Data.Either (isLeft)
 import Domain.Types
   ( Appearance(..)
   , defaultAppearance
+  , RoleAbilityInfo(..)
+  , roleAbilityInfo
   , NightChoice(..)
   , Role(..)
   , Team(..)
@@ -55,6 +57,30 @@ appearanceJSON appearance =
 
 main :: IO ()
 main = hspec $ do
+
+  describe "T02 - Role Ability JSON" $ do
+
+    -- YourRole phai chua thong tin kha nang cho chu so huu.
+    it "A16 - YourRole JSON chua Ability cua Seer" $ do
+      let actual = encode (MsgYourRole "ROOM-01" Seer)
+          expected = object
+            [ "type" .= ("YourRole" :: String)
+            , "roomId" .= ("ROOM-01" :: String)
+            , "role" .= ("Seer" :: String)
+            , "ability" .= object
+                [ "description" .= abilityDescription (roleAbilityInfo Seer)
+                , "phase" .= ("Night" :: String)
+                , "targetRules" .= abilityTargetRules (roleAbilityInfo Seer)
+                ]
+            ]
+
+      eitherDecode actual `shouldBe` Right expected
+
+    -- JSON moi van phai giai ma ve constructor YourRole hien tai.
+    it "A17 - YourRole co Ability van round-trip" $ do
+      let message = MsgYourRole "ROOM-01" Witch
+
+      eitherDecode (encode message) `shouldBe` Right message
 
   -- Lobby JSON - Giu nguyen 11 bai test cu.
   describe "Lobby JSON" $ do

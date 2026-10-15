@@ -13,6 +13,15 @@ import Domain.Types
   , GameResult(..)
   )
 
+import Domain.Types
+  ( RoleAbilityInfo
+      ( abilityDescription
+      , abilityPhase
+      , abilityTargetRules
+      )
+  , roleAbilityInfo
+  )
+
 import Data.Aeson
   ( FromJSON(..)
   , ToJSON(..)
@@ -623,10 +632,16 @@ instance ToJSON ServerMessage where
           ]
 
       MsgYourRole roomId role ->
-        object
+        let info = roleAbilityInfo role
+        in object
           [ "type" .= ("YourRole" :: String)
           , "roomId" .= roomId
           , "role" .= show role
+          , "ability" .= object
+              [ "description" .= abilityDescription info
+              , "phase" .= fmap show (abilityPhase info)
+              , "targetRules" .= abilityTargetRules info
+              ]
           ]
 
       MsgNightActionAccepted roomId ->

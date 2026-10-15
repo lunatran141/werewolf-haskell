@@ -12,7 +12,7 @@ import Domain.Engine
   )
 import Domain.Night
 import Domain.Types
-import Domain.Validation (expectedRoles)
+import Domain.Validation (expectedRoles , validNightTargets)
 
 -- Tao van dung preset 8 hoac 9 nguoi bang StartGame cua T04.
 mkGame :: Int -> GameState
@@ -65,6 +65,12 @@ main = hspec $ do
 
   describe "T05 - Van 8 nguoi: Soi" $ do
 
+    -- Soi chi duoc chon Player con song thuoc Village.
+    it "validNightTargets - Soi khong duoc chon dong doi" $ do
+      let targets = validNightTargets game8 "1" WolfTarget
+
+      targets `shouldBe` ["3", "4", "5", "6", "7", "8"]
+
     it "Co dung 2 Soi con song" $
       livingWolves game8 `shouldBe` ["1", "2"]
 
@@ -96,6 +102,12 @@ main = hspec $ do
 
   describe "T05 - Van 8 nguoi: Tien Tri" $ do
 
+    -- Tien Tri duoc soi nguoi song khac, khong duoc soi chinh minh.
+    it "validNightTargets - Tien Tri khong duoc tu soi" $ do
+      let targets = validNightTargets game8 "3" SeerTarget
+
+      targets `shouldBe` ["1", "2", "4", "5", "6", "7", "8"]
+
     it "Tien Tri soi Soi nhan Wolves" $
       seerInspection game8 "3" "1" `shouldBe` Right Wolves
 
@@ -113,6 +125,20 @@ main = hspec $ do
         `shouldBe` Right [Private "3", Private "3"]
 
   describe "T05 - Van 8 nguoi: Bao Ve" $ do
+
+    -- Guard duoc tu bao ve, nhung khong duoc lap muc tieu dem truoc.
+    it "validNightTargets - Guard khong bao ve lap muc tieu" $ do
+      let state = game8 { gameLastProtected = Just "7" }
+          targets = validNightTargets state "4" GuardTarget
+
+      -- Guard co the chon chinh minh.
+      "4" `shouldSatisfy` (`elem` targets)
+
+      -- Muc tieu da bao ve dem truoc bi loai.
+      "7" `shouldNotSatisfy` (`elem` targets)
+
+      -- Van con 7 muc tieu hop le.
+      length targets `shouldBe` 7
 
     it "Bao Ve duoc tu bao ve va chan Soi" $ do
       let state = withActions game8
@@ -142,6 +168,19 @@ main = hspec $ do
       nightDeaths state `shouldBe` ["7"]
 
   describe "T05 - Van 8 nguoi: Phu Thuy" $ do
+
+    -- Witch het binh Poison thi khong con muc tieu hop le.
+    it "validNightTargets - Witch het Poison khong co muc tieu" $ do
+      let state = game8 { gameWitchPoisonReady = False }
+          targets = validNightTargets state "5" WitchPoison
+
+      targets `shouldBe` []
+
+    -- Witch Poison chi duoc chon nguoi song khac ban than.
+    it "validNightTargets - Witch Poison chon dung muc tieu" $ do
+      let targets = validNightTargets game8 "5" WitchPoison
+
+      targets `shouldBe` ["1", "2", "3", "4", "6", "7", "8"]
 
     it "Heal cuu nan nhan Soi va tieu hao binh cuu" $ do
       let state = withActions game8
@@ -289,6 +328,27 @@ main = hspec $ do
 
   describe "T05 - Kiem tra loi cho ca 8 va 9 nguoi" $ do
 
+    -- Khong cho chon muc tieu Night khi dang o Day.
+    it "validNightTargets - Sai Phase khong co muc tieu" $ do
+      let state = game8 { gamePhase = Day }
+          targets = validNightTargets state "1" WolfTarget
+
+      targets `shouldBe` []
+
+    -- Soi da bo phieu thi khong duoc chon lai trong cung dem.
+    it "validNightTargets - Da dung luot khong co muc tieu" $ do
+      let state = withActions game8 [("1", WolfTarget "7")]
+          targets = validNightTargets state "1" WolfTarget
+
+      targets `shouldBe` []
+
+    -- Soi da chet khong duoc chon bat ky muc tieu nao.
+    it "validNightTargets - Soi chet khong co muc tieu" $ do
+      let state = withDeadPlayer game9 "1"
+          targets = validNightTargets state "1" WolfTarget
+
+      targets `shouldBe` []
+
     it "Van 8: sai Phase bi tu choi" $ do
       let state = game8 { gamePhase = Day }
       nightActionPrivateEvents state "1" (WolfTarget "7")
@@ -364,15 +424,21 @@ main = hspec $ do
              == wolfVictim (withActions game (reverse votes))
 
   describe "T05 - Engine NightAction 8 nguoi" $ do
-
-    it "Soi gui action hop le va luu vao GameState" $ do
+    it "Soi gui action hop le va cap nhat tien do bo phieu" $ do
       case submitNightAction game8 "1" (WolfTarget "7") of
         Left err -> expectationFailure (show err)
         Right (state, events) -> do
           gameNightActions state `shouldBe` [("1", WolfTarget "7")]
-          events `shouldBe` [NightActionAccepted "1"]
-          map eventVisibility events `shouldBe` [Private "1"]
 
+          events `shouldBe`
+            [ NightActionAccepted "1"
+            , WolfVoteUpdated 1 2
+            ]
+
+          map eventVisibility events `shouldBe`
+            [ Private "1"
+            , TeamOnly Wolves
+            ]
     it "Tien Tri soi Soi va nhan ket qua rieng" $ do
       case submitNightAction game8 "3" (SeerTarget "1") of
         Left err -> expectationFailure (show err)
@@ -424,7 +490,15 @@ main = hspec $ do
             , ("3", WolfTarget "9")
             ]
           wolfVictim state `shouldBe` Just "8"
-          events `shouldBe` [NightActionAccepted "3"]
+          events `shouldBe`
+            [ NightActionAccepted "3"
+            , WolfVoteUpdated 3 3
+            ]
+
+          map eventVisibility events `shouldBe`
+            [ Private "3"
+            , TeamOnly Wolves
+            ]
 
     it "Tien Tri van 9 nguoi soi dung Team" $ do
       case submitNightAction game9 "4" (SeerTarget "2") of
@@ -446,6 +520,12 @@ main = hspec $ do
             [("5", GuardTarget "8"), ("6", WitchPoison "9")]
 
   describe "T05 - Engine Validation va Command" $ do
+
+    -- Hanh dong khong hop le khong duoc cap nhat phieu hoac phat event.
+    it "WolfVoteUpdated - Khong phat event khi Soi chon dong doi" $ do
+      let result = submitNightAction game8 "1" (WolfTarget "2")
+
+      result `shouldBe` Left InvalidTarget
 
     it "Sai Phase bi tu choi" $ do
       let state = game8 { gamePhase = Day }
@@ -565,6 +645,28 @@ main = hspec $ do
 
   describe "T05 - Wolf Voting Lock va Witch Notice" $ do
 
+    -- Moi lan khoa phieu hop le chi tao mot WolfTargetLocked.
+    it "WolfTargetLocked - Chi phat mot lan khi khoa phieu" $ do
+      let state = withActions game8
+            [ ("1", WolfTarget "7")
+            , ("2", WolfTarget "7")
+            ]
+
+      case closeWolfVoting state False of
+        Left err ->
+          expectationFailure (show err)
+
+        Right (lockedState, events) -> do
+          let lockedEvents =
+                [ target
+                | WolfTargetLocked target <- events
+                ]
+
+          lockedEvents `shouldBe` [Just "7"]
+
+          closeWolfVoting lockedState False
+            `shouldBe` Left InvalidGameState
+
     it "Van 8: khoa phieu Soi khi du 2 phieu" $ do
       let state = withActions game8
             [("1", WolfTarget "7"), ("2", WolfTarget "7")]
@@ -572,8 +674,15 @@ main = hspec $ do
         Left err -> expectationFailure (show err)
         Right (next, events) -> do
           gameWolfVotingClosed next `shouldBe` True
-          events `shouldBe` [WitchVictimNotice "5" (Just "7")]
-          map eventVisibility events `shouldBe` [Private "5"]
+          events `shouldBe`
+            [ WolfTargetLocked (Just "7")
+            , WitchVictimNotice "5" (Just "7")
+            ]
+
+          map eventVisibility events `shouldBe`
+            [ TeamOnly Wolves
+            , Private "5"
+            ]
 
     it "Van 8: khong khoa som khi moi co 1 phieu" $ do
       let state = withActions game8 [("1", WolfTarget "7")]
@@ -585,7 +694,15 @@ main = hspec $ do
         Left err -> expectationFailure (show err)
         Right (next, events) -> do
           gameWolfVotingClosed next `shouldBe` True
-          events `shouldBe` [WitchVictimNotice "5" (Just "7")]
+          events `shouldBe`
+            [ WolfTargetLocked (Just "7")
+            , WitchVictimNotice "5" (Just "7")
+            ]
+
+          map eventVisibility events `shouldBe`
+            [ TeamOnly Wolves
+            , Private "5"
+            ]
 
     it "Van 8: Soi khong duoc bo phieu sau khi khoa" $ do
       let state = game8 { gameWolfVotingClosed = True }
@@ -595,10 +712,20 @@ main = hspec $ do
     it "Van 8: Soi hoa 1-1 thi Witch nhan Nothing" $ do
       let state = withActions game8
             [("1", WolfTarget "7"), ("2", WolfTarget "8")]
+
       case closeWolfVoting state False of
         Left err -> expectationFailure (show err)
-        Right (_, events) ->
-          events `shouldBe` [WitchVictimNotice "5" Nothing]
+
+        Right (_, events) -> do
+          events `shouldBe`
+            [ WolfTargetLocked Nothing
+            , WitchVictimNotice "5" Nothing
+            ]
+
+          map eventVisibility events `shouldBe`
+            [ TeamOnly Wolves
+            , Private "5"
+            ]
 
     it "Van 9: khoa phieu 2-1 va thong bao dung nan nhan" $ do
       let state = withActions game9
@@ -608,8 +735,16 @@ main = hspec $ do
             ]
       case closeWolfVoting state False of
         Left err -> expectationFailure (show err)
-        Right (_, events) ->
-          events `shouldBe` [WitchVictimNotice "6" (Just "8")]
+        Right (_, events) -> do
+          events `shouldBe`
+            [ WolfTargetLocked (Just "8")
+            , WitchVictimNotice "6" (Just "8")
+            ]
+
+          map eventVisibility events `shouldBe`
+            [ TeamOnly Wolves
+            , Private "6"
+            ]
 
     it "Van 9: khoa luot hai lan bi tu choi" $ do
       let state = withActions game9

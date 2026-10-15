@@ -317,8 +317,29 @@ submitNightAction state actor choice = do
   -- Luu hanh dong da duoc xac thuc, khong thay doi state ban dau.
   let newState = state
         { gameNightActions = gameNightActions state ++ [(actor, choice)] }
+
+      -- Chi thong bao tien do khi mot Soi bo phieu hop le.
+      wolfEvents =
+        case choice of
+          WolfTarget _ ->
+            let aliveWolves =
+                  [ p
+                  | p <- gamePlayers newState
+                  , playerLifeStatus p == Alive
+                  , playerRole p == Just Werewolf
+                  ]
+
+                votedWolves =
+                  [ pid
+                  | (pid, WolfTarget _) <- gameNightActions newState
+                  , pid `elem` map playerId aliveWolves
+                  ]
+            in [WolfVoteUpdated (length votedWolves) (length aliveWolves)]
+
+          _ -> []
+
   validateGameInvariant newState
-  pure (newState, events)
+  pure (newState, events ++ wolfEvents)
 -- T05: Server khoa phieu Soi va gui thong bao rieng cho Phu Thuy.
 -- timedOut chi do Server cung cap, khong tin gia tri tu client.
 closeWolfVoting :: GameState -> Bool -> Either GameError (GameState, [DomainEvent])
@@ -331,12 +352,27 @@ closeWolfVoting state timedOut = do
   validateGameInvariant state
   if not timedOut && not (wolfVotingComplete state)
     then Left InvalidGameState else Right ()
-  let newState = state {gameWolfVotingClosed = True}
-      witchIds = [playerId p | p <- gamePlayers state
-                 , playerLifeStatus p == Alive, playerRole p == Just Witch]
-      events = [WitchVictimNotice pid (wolfVictim state) | pid <- witchIds]
+  let newState = state { gameWolfVotingClosed = True }
+
+      witchIds =
+        [ playerId p
+        | p <- gamePlayers state
+        , playerLifeStatus p == Alive
+        , playerRole p == Just Witch
+        ]
+
+      -- Thong bao ket qua khoa phieu cho phe Soi.
+      wolfEvents =
+        [WolfTargetLocked (wolfVictim state)]
+
+      -- Chi Phu Thuy nhan thong tin nan nhan de quyet dinh Heal.
+      witchEvents =
+        [ WitchVictimNotice pid (wolfVictim state)
+        | pid <- witchIds
+        ]
+
   validateGameInvariant newState
-  pure (newState, events)
+  pure (newState, wolfEvents ++ witchEvents)
 -- T05: Nhan Command NightAction theo ADT da dinh nghia tai T02.
 applyNightCommand :: GameState -> Command -> Either GameError (GameState, [DomainEvent])
 applyNightCommand state command =
@@ -605,16 +641,6 @@ finishVotingDeaths state prefixEvents = do
 
   pure (nextState, prefixEvents ++ deathEvents ++ phaseEvents)
 
-
-pendingRevealEvents :: GameState -> Either GameError [DomainEvent]
-pendingRevealEvents state = mapM revealOne (gamePendingReveals state)
-  where
-    revealOne pid = do
-      player <- validatePlayerExists pid (gamePlayers state)
-      case (playerLifeStatus player, playerRole player) of
-        (Dead, Just role) ->
-          Right (PlayerRoleRevealed pid role (teamOfRole role))
-        _ -> Left InvalidGameState
 
 -- T06: Chat chỉ phát event public ở Day và không làm thay đổi gameplay state.
 sendChat

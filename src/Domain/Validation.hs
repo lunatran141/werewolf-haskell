@@ -381,6 +381,20 @@ validateNightAction game actor action = do
 
         else Right ()
 
+-- T05: Lay danh sach muc tieu Night hop le cho mot actor va loai action.
+-- Tai Server, actor phai duoc lay tu session da xac thuc.
+-- Khong tin PlayerId do client tu khai.
+validNightTargets
+  :: GameState
+  -> PlayerId
+  -> (PlayerId -> NightChoice)
+  -> [PlayerId]
+validNightTargets game actor mkChoice =
+  [ playerId target
+  | target <- gamePlayers game
+  , validateNightAction game actor (mkChoice (playerId target)) == Right ()
+  ]
+
 -- Nếu phiếu Sói hòa thì chưa có nạn nhân duy nhất cho Witch Heal.
 
 wolfVictimKnown :: GameState -> Bool
@@ -491,6 +505,38 @@ validateChat game actor message = do
 
     then Left EmptyChat
 
+    else Right ()
+
+-- T02: Kiem tra chat theo kenh va quyen cua actor.
+-- Chi Server duoc xac dinh actor va room tu session.
+validateChatInChannel
+  :: GameState
+  -> PlayerId
+  -> ChatChannel
+  -> String
+  -> Either GameError ()
+validateChatInChannel game actor channel message = do
+  case channel of
+    PublicDay ->
+      validatePhase Day game
+
+    WolvesNight ->
+      validatePhase Night game
+
+  player <- validatePlayerExists actor (gamePlayers game)
+  _ <- validatePlayerAlive player
+
+  case channel of
+    PublicDay ->
+      Right ()
+
+    WolvesNight ->
+      if playerRole player == Just Werewolf
+        then Right ()
+        else Left InvalidRole
+
+  if all isSpace message
+    then Left EmptyChat
     else Right ()
 
 validateHunterShot

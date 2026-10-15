@@ -18,7 +18,10 @@ module DomainT02Spec (spec) where
 
 import Domain.Types
 import Domain.Validation
-import Domain.Engine (applyLobbyCommand)
+import Domain.Engine
+  ( applyLobbyCommand
+  , finishResolvedNight
+  )
 
 import Test.Hspec
 import Test.QuickCheck
@@ -75,6 +78,47 @@ customAppearance =
 -- T02Main.hs se goi ham nay bang hspec.
 spec :: Spec
 spec = do
+
+  describe "T02 - ChatChannel Validation" $ do
+
+    it "C01 - Alive duoc chat PublicDay trong Day" $ do
+      let state = started8 { gamePhase = Day }
+      validateChatInChannel state "p7" PublicDay "Xin chao"
+        `shouldBe` Right ()
+
+    it "C02 - Werewolf duoc chat WolvesNight trong Night" $ do
+      validateChatInChannel started8 "p1" WolvesNight "Chon p7"
+        `shouldBe` Right ()
+
+    it "C03 - Villager khong duoc chat WolvesNight" $ do
+      validateChatInChannel started8 "p7" WolvesNight "Xin chao"
+        `shouldBe` Left InvalidRole
+
+    it "C04 - WolvesNight khong duoc chat trong Day" $ do
+      let state = started8 { gamePhase = Day }
+      validateChatInChannel state "p1" WolvesNight "Chon p7"
+        `shouldBe` Left WrongPhase
+
+    it "C05 - PublicDay khong duoc chat trong Night" $ do
+      validateChatInChannel started8 "p7" PublicDay "Xin chao"
+        `shouldBe` Left WrongPhase
+
+    it "C06 - Chat rong bi tu choi" $ do
+      validateChatInChannel started8 "p1" WolvesNight "   "
+        `shouldBe` Left EmptyChat
+
+    it "C07 - Soi da chet khong duoc chat" $ do
+      let state = started8
+            { gamePlayers =
+                [ if playerId p == "p1"
+                    then p { playerLifeStatus = Dead }
+                    else p
+                | p <- gamePlayers started8
+                ]
+            }
+
+      validateChatInChannel state "p1" WolvesNight "Xin chao"
+        `shouldBe` Left DeadPlayer
 
   describe "T02 - Smart Constructor" $ do
 
@@ -215,12 +259,70 @@ spec = do
         (SeerResult "p3" Wolves)
         `shouldBe` Private "p3"
 
-    -- Test cu theo contract hien tai.
-    -- Can cap nhat khi trien khai Role Privacy moi.
-    it "U23 - Role Reveal khi chet la Public" $
+    -- Khi chet chi cong khai PlayerId, khong tiet lo Role.
+    it "U23 - PlayerDied la Public" $
       eventVisibility
-        (PlayerRoleRevealed "p3" Seer Village)
+        (PlayerDied "p3")
         `shouldBe` Public
+
+    -- Chi cong khai danh sach Role khi GameOver.
+    it "U23b - GameRolesRevealed la Public" $
+      eventVisibility
+        (GameRolesRevealed [("p3", Seer)])
+        `shouldBe` Public
+    -- Chua GameOver thi khong duoc cong khai Role.
+    it "U23c - Night sang Day khong reveal Role" $ do
+      let resolvedState =
+            started8 { gameNightResolved = True }
+
+      case finishResolvedNight resolvedState Nothing of
+        Left err ->
+          expectationFailure (show err)
+
+        Right (newState, events) -> do
+          gamePhase newState `shouldBe` Day
+
+          let revealedRoles =
+                [ roles | GameRolesRevealed roles <- events ]
+
+          revealedRoles `shouldBe` []
+
+    -- GameOver phai cong khai day du Role cua 8 Player.
+    it "U23d - GameOver reveal du 8 Role" $ do
+      let resolvedState =
+            started8 { gameNightResolved = True }
+
+      case finishResolvedNight resolvedState (Just (Winner Village)) of
+        Left err ->
+          expectationFailure (show err)
+        Right (newState, events) -> do
+          gamePhase newState `shouldBe` GameOver
+
+          let expectedRolesList =
+                [ (playerId p, role)
+                | p <- gamePlayers newState
+                , Just role <- [playerRole p]
+                ]
+
+          let revealedRoles =
+                [ roles | GameRolesRevealed roles <- events ]
+
+          revealedRoles `shouldBe` [expectedRolesList]
+
+          length expectedRolesList `shouldBe` 8
+
+    -- GameOver roi thi khong duoc reveal them lan nua.
+    it "U23e - Khong reveal Role lap lai" $ do
+      let resolvedState =
+            started8 { gameNightResolved = True }
+
+      case finishResolvedNight resolvedState (Just (Winner Village)) of
+        Left err ->
+          expectationFailure (show err)
+
+        Right (endedState, _) ->
+          finishResolvedNight endedState (Just (Winner Village))
+            `shouldBe` Left GameAlreadyOver
 
   describe "T02 - Night Action Validation" $ do
 

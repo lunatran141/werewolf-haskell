@@ -17,6 +17,62 @@ teamOfRole _        = Village
 data Phase = Lobby | Night | Day | Voting | GameOver
   deriving (Eq, Ord, Show, Read, Enum, Bounded)
 
+-- T02: Thong tin huong dan kha nang cho tung Role.
+-- Day la mo ta chung theo loai vai, khong chua PlayerId.
+-- Server chi gui Role thuc cua actor cho dung chu so huu.
+data RoleAbilityInfo = RoleAbilityInfo
+  { abilityRole        :: Role
+  , abilityDescription :: String
+  , abilityPhase       :: Maybe Phase
+  , abilityTargetRules :: String
+  } deriving (Eq, Show, Read)
+
+-- Mo ta kha nang va gioi han theo Game Rules T01.
+roleAbilityInfo :: Role -> RoleAbilityInfo
+roleAbilityInfo role =
+  case role of
+    Werewolf ->
+      RoleAbilityInfo
+        Werewolf
+        "Moi dem chon mot nguoi thuoc phe Village de can. Moi Soi song co mot phieu; muc tieu co so phieu cao nhat duy nhat se bi tan cong."
+        (Just Night)
+        "Chi chon nguoi con song thuoc Village. Khong chon Soi dong doi."
+
+    Seer ->
+      RoleAbilityInfo
+        Seer
+        "Moi dem soi mot nguoi de biet phe Wolves hoac Village cua nguoi do. Ket qua chi gui rieng cho Tien Tri."
+        (Just Night)
+        "Chi chon nguoi con song khac ban than."
+
+    Guard ->
+      RoleAbilityInfo
+        Guard
+        "Moi dem bao ve mot nguoi khoi bi Soi can. Co the tu bao ve nhung khong duoc bao ve cung muc tieu trong hai dem lien tiep."
+        (Just Night)
+        "Chi chon nguoi con song. Khong trung muc tieu bao ve dem truoc."
+
+    Witch ->
+      RoleAbilityInfo
+        Witch
+        "Moi dem chon Heal, Poison hoac Pass. Moi binh Heal va Poison chi duoc su dung mot lan trong ca van. Heal chi cuu nan nhan Soi."
+        (Just Night)
+        "Heal chi kha dung sau khi khoa phieu Soi va co nan nhan. Poison chon nguoi con song khac ban than. Pass khong can muc tieu."
+
+    Hunter ->
+      RoleAbilityInfo
+        Hunter
+        "Khi chet do bat ky nguyen nhan nao, Tho San co the ban toi da mot nguoi khi Server kich hoat Hunter Shot."
+        Nothing
+        "Chi duoc ban trong Hunter pending. Co the bo qua luot hoac het gio."
+
+    Villager ->
+      RoleAbilityInfo
+        Villager
+        "Tham gia thao luan ban ngay va bo phieu loai nguoi nghi la Soi. Khong co kha nang dac biet ban dem."
+        (Just Voting)
+        "Khi Voting, chon nguoi con song khac ban than."
+
 data LifeStatus = Alive | Dead
   deriving (Eq, Show, Read)
 
@@ -152,6 +208,10 @@ data DomainEvent
   | PhaseChanged Phase
   | PlayerRoleAssigned PlayerId Role
   | NightActionAccepted PlayerId
+  -- Tien do bo phieu cua Soi, khong chua danh tinh nguoi bo phieu.
+  | WolfVoteUpdated Int Int
+  -- Ket qua khoa phieu Soi, chi phe Soi duoc nhan.
+  | WolfTargetLocked (Maybe PlayerId)
   | SeerResult PlayerId Team
   | WitchVictimNotice PlayerId (Maybe PlayerId)
   | NightResolved [PlayerId]
@@ -178,6 +238,9 @@ eventVisibility event =
     PlayerRoleRevealed _ _ _ -> TeamOnly Village
     SeerResult pid _         -> Private pid
     NightActionAccepted pid  -> Private pid
+    -- Chi phe Soi duoc nhan tien do va ket qua khoa phieu.
+    WolfVoteUpdated _ _     -> TeamOnly Wolves
+    WolfTargetLocked _      -> TeamOnly Wolves
     VoteUpdated voter _      -> Private voter
     HunterShotPending pid    -> Private pid
     WitchVictimNotice pid _ -> Private pid
