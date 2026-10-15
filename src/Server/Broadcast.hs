@@ -46,13 +46,16 @@ votingSnapshot rid recipient state = MsgVotingSnapshot rid
   (gameResult state)
 
 -- Lobby
-
+-- Tao PlayerView chi chua thong tin cong khai.
+-- Khong dua Role hoac Team cua Player vao snapshot.
 playerView :: Player -> PlayerView
 playerView player =
   PlayerView
     (playerId player)
     (playerName player)
     (playerReady player)
+    (playerLifeStatus player == Alive)
+    (playerAppearance player)
 
 -- Gui rieng cho nguoi vua Join de biet ID, Host va danh sach phong.
 lobbySnapshot :: RoomId -> PlayerId -> GameState -> ServerMessage
@@ -155,8 +158,10 @@ lobbyError err =
 
 -- T05/T06 - Night, Vote va death event routing
 
--- Public: moi client trong phong duoc nhan.
--- Private pid: chi client co PlayerId trung pid duoc nhan.
+-- Su kien Public duoc gui cho tat ca nguoi choi trong phong.
+-- Su kien Private chi duoc gui cho nguoi choi co PlayerId tuong ung.
+-- Su kien TeamOnly can kiem tra phe va trang thai song/chet.
+-- Tam thoi tu choi TeamOnly cho den khi Server ho tro phan quyen day du.
 canReceiveNightEvent :: PlayerId -> DomainEvent -> Bool
 canReceiveNightEvent recipient event =
   case eventVisibility event of
@@ -165,6 +170,9 @@ canReceiveNightEvent recipient event =
 
     Private pid ->
       recipient == pid
+
+    TeamOnly _ ->
+      False
 
 -- Chuyen DomainEvent thanh ServerMessage cho tung client.
 -- Khong broadcast event Private cho toan bo phong.
@@ -213,9 +221,18 @@ nightMessagesFor rid recipient events =
         HunterShotResolved hunterId targetId ->
           Just (MsgHunterShotResolved rid hunterId targetId)
 
-        -- Cong khai Role va Team cua nguoi da chet.
-        PlayerRoleRevealed pid role team ->
-          Just (MsgPlayerRoleRevealed rid pid role team)
+        -- Khong cho phep tiet lo Role khi nguoi choi chet.
+        -- Toan bo Role chi duoc cong khai tai GameOver.
+        PlayerRoleRevealed _ _ _ ->
+          Nothing
+
+        -- T02: Cong khai nguoi chet, khong kem Role hoac Team.
+        PlayerDied pid ->
+          Just (MsgPlayerDied rid pid)
+
+        -- T02: Chi cong khai toan bo Role khi GameOver.
+        GameRolesRevealed roles ->
+          Just (MsgGameRolesRevealed rid roles)
 
         -- Thong bao chuyen Phase.
         PhaseChanged phase ->

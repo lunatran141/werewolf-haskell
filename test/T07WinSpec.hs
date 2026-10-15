@@ -20,6 +20,7 @@ testPlayer number role lifeStatus =
     , playerRole = Just role
     , playerReady = True
     , playerLifeStatus = lifeStatus
+    , playerAppearance = defaultAppearance
     }
 
 -- Tạo GameState nhỏ gọn cho test.
