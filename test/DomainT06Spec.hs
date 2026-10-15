@@ -21,7 +21,7 @@ startedVoting8 :: GameState
 startedVoting8 =
   emptyLobby
     { gamePlayers =
-        [ Player pid ("Nguoi " ++ pid) (Just role) True Alive
+        [ Player pid ("Nguoi " ++ pid) (Just role) True Alive defaultAppearance
         | (pid, role) <- zip (map ("p" ++) (map show [1 :: Int .. 8])) roles8
         ]
     , gameHost = "p1"
@@ -121,8 +121,7 @@ t06Spec = do
       gameVotingResolved resolved `shouldBe` False
       events `shouldBe`
         [ VotingResolved [("p7", 2)] (Just "p7")
-        , PlayerEliminated "p7"
-        , PlayerRoleRevealed "p7" Villager Village
+        , PlayerDied "p7"
         , PhaseChanged Night
         ]
 
@@ -155,7 +154,7 @@ t06Spec = do
       gameResult pending `shouldBe` Nothing
       events `shouldBe` [VotingResolved [("p6", 1)] (Just "p6"), HunterShotPending "p6"]
 
-    it "Hunter ban target roi moi reveal va chuyen phase" $ do
+    it "Hunter ban target roi cong khai nguoi chet, giu kin vai va chuyen phase" $ do
       let voted = castVote startedVoting8 "p1" "p6"
           (pending, _) = mustRight (applyCommand voted ResolveVoting)
           (resolved, events) =
@@ -165,10 +164,8 @@ t06Spec = do
       playerLifeStatus (findById "p1" resolved) `shouldBe` Dead
       events `shouldBe`
         [ HunterShotResolved "p6" (Just "p1")
-        , PlayerEliminated "p6"
-        , PlayerEliminated "p1"
-        , PlayerRoleRevealed "p6" Hunter Village
-        , PlayerRoleRevealed "p1" Werewolf Wolves
+        , PlayerDied "p6"
+        , PlayerDied "p1"
         , PhaseChanged Night
         ]
 
@@ -181,7 +178,10 @@ t06Spec = do
             mustRight (applyCommand pending (ResolveHunter "p6" (Just "p1")))
       gamePhase finished `shouldBe` GameOver
       gameResult finished `shouldBe` Just Draw
-      last events `shouldBe` GameFinished Draw
+      -- T02 chi cong bo danh sach vai khi van choi da ket thuc.
+      events `shouldSatisfy` elem (GameFinished Draw)
+      last events `shouldBe`
+        GameRolesRevealed (zip ["p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8"] roles8)
 
     it "Khong con Soi song thi ket qua la Winner Village" $ do
       let state =
@@ -224,7 +224,7 @@ t06Spec = do
 
     it "Van 9 nguoi van dung luat duy nhat cao nhat va invariant" $ do
       let roles = Werewolf : roles8
-          nine = startedVoting8 {gamePlayers = zipWith (\n role -> Player ("p" ++ show n) (show n) (Just role) True Alive) [1 :: Int .. 9] roles,
+          nine = startedVoting8 {gamePlayers = zipWith (\n role -> Player ("p" ++ show n) (show n) (Just role) True Alive defaultAppearance) [1 :: Int .. 9] roles,
                                  gameConfiguredRoles = roles}
           (finished, _) = mustRight (applyCommand (castVote nine "p1" "p9") ResolveVoting)
       playerLifeStatus (findById "p9" finished) `shouldBe` Dead

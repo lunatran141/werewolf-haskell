@@ -20,6 +20,7 @@ import Domain.Types
   , emptyLobby
   , gamePlayers
   , playerName
+  , defaultAppearance
   )
 import Server.GameLoop
   ( CreateRoomError(..)
@@ -121,11 +122,12 @@ main = hspec $ describe "T08 Lobby GameLoop" $ do
     lobbySnapshot "ROOM-01" "p1" (updateState update)
       `shouldBe`
         MsgLobbySnapshot "ROOM-01" "p1" "p1"
-          [PlayerView "p1" "Van" False]
+          [PlayerView "p1" "Van" False True defaultAppearance]
 
     lobbyMessages "ROOM-01" update
       `shouldBe`
-        [MsgPlayerJoined "ROOM-01" (PlayerView "p1" "Van" False)]
+        [MsgPlayerJoined "ROOM-01"
+          (PlayerView "p1" "Van" False True defaultAppearance)]
 
   it "Host roi tao PlayerLeft roi HostChanged dung thu tu" $ do
     room <- newRoomRuntime "ROOM-01"
@@ -169,7 +171,7 @@ main = hspec $ describe "T08 Lobby GameLoop" $ do
     lobbyReply "ROOM-01" "req-3" "p1" (SetReady "p1" True) result
       `shouldBe`
         MsgLobbySnapshot "ROOM-01" "p1" "p1"
-          [PlayerView "p1" "Van" True]
+          [PlayerView "p1" "Van" True True defaultAppearance]
 
   it "Lenh loi tra CommandRejected dung requestId" $ do
     room <- newRoomRuntime "ROOM-01"

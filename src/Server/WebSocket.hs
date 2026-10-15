@@ -43,17 +43,11 @@ import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Domain.RoleShuffle (shuffleRoles)
 
 import Domain.Types
-
   ( Command(..)
-
   , DomainEvent(..)
-
   , GameError(..)
-
   , GameState(..)
-
   , Player(..)
-
   , PlayerId
   , Phase(..)
   , NightChoice(..)
@@ -98,11 +92,9 @@ import Server.Broadcast
   )
 
 import Server.GameLoop
-
   ( CreateRoomError(..)
-
   , createRoomWithHost
-
+  , createRoomWithHostAppearance
   )
 
 import Server.Room
@@ -530,6 +522,30 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
 
               beginSession room actor sessionRef outbound
 
+
+    -- Tao phong voi Appearance do nguoi choi chon.
+    ClientCreateRoomWithAppearance requestId rid name appearance -> do
+      current <- readIORef sessionRef
+
+      case current of
+        Just _ ->
+          reject outbound requestId "ALREADY_JOINED"
+            "Ban da o trong mot phong."
+
+        Nothing -> do
+          result <-
+            createRoomWithHostAppearance
+              registry rid requestId actor name appearance startWorker
+
+          case result of
+            Left err ->
+              sendToClient outbound
+                (createErrorReply requestId rid actor name err)
+
+            Right (room, _) ->
+              beginSession room actor sessionRef outbound
+
+
     -- Tham gia phong.
 
     ClientJoin requestId rid name -> do
@@ -583,6 +599,43 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
                 Right _ ->
 
                   beginSession room actor sessionRef outbound
+
+
+    -- Tham gia phong voi Appearance do nguoi choi chon.
+    ClientJoinWithAppearance requestId rid name appearance -> do
+      current <- readIORef sessionRef
+
+      case current of
+        Just _ ->
+          reject outbound requestId "ALREADY_JOINED"
+            "Ban da o trong mot phong."
+
+        Nothing -> do
+          let command = JoinWithAppearance actor name appearance
+
+          found <- withMVar (registryRooms registry) $ \rooms ->
+            case lookup rid rooms of
+              Nothing ->
+                pure Nothing
+
+              Just room -> do
+                result <- submitCommand room requestId actor command
+                pure (Just (room, result))
+
+          case found of
+            Nothing ->
+              reject outbound requestId "ROOM_NOT_FOUND"
+                "Khong tim thay phong."
+
+            Just (room, result) ->
+              case result of
+                Left _ ->
+                  sendToClient outbound
+                    (lobbyReply rid requestId actor command result)
+
+                Right _ ->
+                  beginSession room actor sessionRef outbound
+
 
     -- Roi phong.
 

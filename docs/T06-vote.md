@@ -2,7 +2,7 @@
 
 ## Phạm vi và điểm nối với nhóm
 
-T06 xử lý từ lúc phòng vào Voting đến khi chốt phiếu, xử lý Hunter, reveal người chết và chuyển Night/GameOver. Hunter chết ở Night cũng được xử lý trước khi T05 hoàn tất sang Day. Không thay đổi preset 8/9 người, luật Night hay cách tăng vòng của T04.
+T06 xử lý từ lúc phòng vào Voting đến khi chốt phiếu, xử lý Hunter, công bố ID người chết và chuyển Night/GameOver. Theo hợp đồng T01/T02 mới, vai thật của mọi người chỉ được công khai tại GameOver. Hunter chết ở Night cũng được xử lý trước khi T05 hoàn tất sang Day. Không thay đổi preset 8/9 người, luật Night hay cách tăng vòng của T04.
 
 Bản ghép đã giữ StartGame, phân vai riêng tư và điều phối Night của T05 trên `develop` tại commit `73513ba`. Bộ điều phối chung vẫn cần gọi `atomically (applyInternalCommand room AdvancePhase)` khi hết Day; phòng phải đang có trạng thái Day hợp lệ. Đây là hàm Haskell nội bộ, không phải thông điệp được Browser quyền gửi. Không ghi thẳng TVar khi tích hợp vì sẽ bỏ qua event/version. Chưa thêm timer Day/Night ngoài phạm vi sửa conflict.
 
@@ -12,11 +12,11 @@ Worker hiện có `runLobbyLoop` dùng chung queue và tự mở timer khi nhậ
 
 `UI → Vote JSON → xác thực session/phòng → queue STM → Domain validation → commit state/version/event → lọc public/private → UI`
 
-`Hết hạn Voting → tally → hòa/không phiếu: không loại; cao nhất duy nhất: lynch → chờ Hunter nếu có → reveal → checkWin → Night hoặc GameOver`
+`Hết hạn Voting → tally → hòa/không phiếu: không loại; cao nhất duy nhất: lynch → chờ Hunter nếu có → công bố ID người chết → checkWin → Night hoặc GameOver`
 
 Luật: không tự vote, người chết không vote, mục tiêu phải tồn tại và còn sống, mỗi người chỉ một phiếu/vòng. Phiếu sai không commit, không tăng version, không phát event. Request đã được chấp nhận bị gửi lại trả `DuplicateRequest`; request khác nhưng đã vote trong vòng trả `AlreadyVoted`. Cache request nằm trong bộ nhớ phòng, không phải cơ chế persistence/reconnect sau restart.
 
-Chỉ Hunter đang pending được chọn bắn/bỏ qua dù đã chết. Hết giờ tự bỏ qua. Không chốt thắng hoặc reveal vai trước khi giải quyết xong Hunter. Ưu tiên Draw → Village → Wolves theo luật chung.
+Chỉ Hunter đang pending được chọn bắn/bỏ qua dù đã chết. Hết giờ tự bỏ qua. Không chốt thắng hoặc công bố người chết trước khi giải quyết xong Hunter; vai thật chỉ công khai khi GameOver. Ưu tiên Draw → Village → Wolves theo luật chung.
 
 ## File và kiến thức áp dụng
 
@@ -54,8 +54,9 @@ Sau merge, dùng duy nhất `HunterAction` theo contract T05: `HunterPass` là b
 - `CommandRejected`: giữ contract lỗi hiện có, gồm requestId/code/message.
 - `VoteUpdated`: receipt riêng, không lộ mục tiêu của voter cho người khác.
 - `VotingResolved`: roomId, tally dạng `[["p2",2]]`, targetId hoặc null. Tally chỉ công khai sau khóa phiếu.
-- `VotingSnapshot`: roomId, phase, day, players (playerId/displayName/alive), hasVoted của chính người nhận, canShoot của chính người nhận, resolved, result. Không có role người sống hoặc danh sách phiếu cá nhân. Người chết đang chờ batch reveal vẫn được che trạng thái cho tới khi hoàn tất Hunter.
-- `PlayerRoleRevealed`, `PhaseChanged`, `GameFinished`, `HunterShotPending/Resolved`: giữ contract T05. `HunterShotResolved` có cả `hunterId` và `targetId` (null nếu bỏ qua). Handler không còn nhánh `HUNTER_ENGINE_NOT_READY`.
+- `VotingSnapshot`: roomId, phase, day, players (playerId/displayName/alive), hasVoted của chính người nhận, canShoot của chính người nhận, resolved, result. Không có vai thật của người sống hoặc người chết, cũng không có danh sách phiếu cá nhân. Trạng thái của người chết đang chờ Hunter được che cho tới khi hoàn tất hiệu ứng liên quan.
+- `PlayerDied`: công khai PlayerId của người chết sau khi xử lý xong Hunter, không kèm Role/Team. `GameRolesRevealed` chỉ gửi danh sách vai thật khi GameOver. `PlayerRoleRevealed` còn trong parser cũ nhưng không được phát trong luồng mới sau khi PR T02/T05 được tích hợp.
+- `PhaseChanged`, `GameFinished`, `HunterShotPending/Resolved`: giữ contract T05. `HunterShotResolved` có cả `hunterId` và `targetId` (null nếu bỏ qua). Handler không còn nhánh `HUNTER_ENGINE_NOT_READY`.
 
 Phiên bản commit vẫn nằm ở RoomUpdate nội bộ. Chưa bổ sung envelope gameVersion/sequence hay reconnect cùng định danh cho toàn protocol: đây là điểm tích hợp connection hardening chung, không được xem là đã hoàn thành bởi T06.
 
@@ -81,7 +82,7 @@ Kết quả trước khi ghép T05, ngày 14/10/2026 (không dùng thay kết qu
 
 ## Trước khi tự push
 
-Review riêng các thay đổi T06 và kết quả merge; không dùng add-all nếu còn file ngoài phạm vi. Không commit build artifact. Tác giả tự commit/push để PR #17 cập nhật; chưa commit merge thì branch trên GitHub chưa nhận việc giải quyết conflict.
+Review riêng các thay đổi T06 và kết quả đồng bộ với `develop`; không dùng add-all nếu còn file ngoài phạm vi. Không commit build artifact. Tác giả tự commit/push sau khi kiểm tra lại các phần phụ thuộc của nhóm.
 
 Ba đổi tên tài liệu đã nằm trong commit T06 trước khi sửa conflict được giữ nguyên; các liên kết README/T02 tới tên cũ được cập nhật. Không phải file của nhóm bị bỏ sót. `develop` local đã được pull fast-forward và kiểm tra khớp origin trước khi ghép. Giữ `docs/T05-night-actions.md` và thay đổi test quyền nhận YourRole từ develop.
 
@@ -94,3 +95,11 @@ Ba đổi tên tài liệu đã nằm trong commit T06 trước khi sửa confli
 - `node --check web/app.js`, `node --test test/T06UiSpec.cjs`: PASS. Test UI kiểm tra ID HTML duy nhất và giữ Start/Night sau khi ghép.
 - Docker không khả dụng trong PATH local nên chưa chạy `docker compose config` hoặc build container; không đánh dấu Docker PASS.
 - Còn log ngoại lệ khi client test đóng socket nhanh; test vẫn exit 0. Chưa mở rộng sửa connection hardening ngoài phạm vi merge này.
+
+## Đồng bộ T06 với PR T02/T05 — 15/10/2026
+
+T01 yêu cầu trước GameOver chỉ công khai PlayerId của người chết; vai thật của toàn bộ người chơi chỉ công khai tại GameOver. PR T02/T05 thêm `Appearance` vào `Player`, đổi sự kiện chết sang `PlayerDied` và phát `GameRolesRevealed` tại GameOver. Bốn bộ test T06 trong thư mục chính đã được cập nhật fixture và kỳ vọng sự kiện tương ứng; logic Vote/Tally/Tie/Lynch và Hunter không thay đổi.
+
+- Trên bản review dựa vào commit `5637142` của PR T02/T05, bốn bộ test T06 chạy qua: 4/4 bộ, 46/46 trường hợp. Thay đổi đã được chép vào thư mục chính nhưng nhánh hiện tại chưa chứa PR T02/T05; không được tính là kết quả test PASS trên nhánh này.
+- Để chạy bốn test T06 đã cập nhật, cần tích hợp PR T02/T05 vào cùng nhánh. Không tự nhập 11 file của bạn cùng nhóm khi PR chưa được merge; sau khi PR được merge vào `develop`, đồng bộ nhánh T06 với `develop` rồi chạy lại test.
+- Toàn bộ `cabal test all` trên bản review PR T02/T05 còn lỗi ở test T04 (thiếu kỳ vọng `GameRolesRevealed`) và test `server-gameloop-test` (constructor `PlayerView` thêm `alive`/`appearance`). Đây là test của phần nhóm khác, chưa được T06 sửa.

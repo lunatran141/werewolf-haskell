@@ -29,7 +29,7 @@ votingState :: GameState
 votingState =
   emptyLobby
     { gamePlayers =
-        [ Player pid ("Nguoi " ++ pid) (Just role) True Alive
+        [ Player pid ("Nguoi " ++ pid) (Just role) True Alive defaultAppearance
         | (pid, role) <- zip (map ("p" ++) (map show [1 :: Int .. 8])) roles8
         ]
     , gameHost = "p1"

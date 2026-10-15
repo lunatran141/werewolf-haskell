@@ -7,6 +7,7 @@ module Server.GameLoop
   , applyInternalCommand
   , CreateRoomError(..)
   , createRoomWithHost
+  , createRoomWithHostAppearance
   ) where
 
 import Control.Concurrent.MVar (modifyMVar)
@@ -49,6 +50,7 @@ import Domain.Types
   , Player(..)
   , PlayerId
   , Role(..)
+  , Appearance
   )
 
 import Protocol.Types (RequestId, RoomId)
@@ -68,7 +70,9 @@ actorMatches request =
   case queuedCommand request of
     Join pid _ ->
       pid == queuedActorId request
-
+    -- Kiem tra PlayerId cua lenh Join co Appearance.
+    JoinWithAppearance pid _ _ ->
+      pid == queuedActorId request
     Leave pid ->
       pid == queuedActorId request
 
@@ -249,7 +253,9 @@ dispatchPlayerCommand state command =
     -- Lobby.
     Join _ _ ->
       applyLobbyCommand state command
-
+    -- Xu ly Join voi ngoai hinh da duoc validate.
+    JoinWithAppearance _ _ _ ->
+      applyLobbyCommand state command
     Leave _ ->
       applyLobbyCommand state command
 
@@ -376,6 +382,7 @@ runGameLoopWithTimeouts voteMicros hunterMicros room = startWindow
             else loop
       loop
 
+
 -- Loi khi tao phong.
 data CreateRoomError
   = InvalidRoomId
@@ -383,8 +390,8 @@ data CreateRoomError
   | HostJoinRejected GameError
   deriving (Eq, Show)
 
--- Tao phong va Host.
--- Chi cong bo phong sau khi Host Join thanh cong.
+-- Tao phong va Host theo contract cu.
+-- Giu lai de khong anh huong T03/T06.
 createRoomWithHost
   :: RoomRegistry
   -> RoomId
@@ -393,7 +400,39 @@ createRoomWithHost
   -> String
   -> (RoomRuntime -> IO ())
   -> IO (Either CreateRoomError (RoomRuntime, GameState))
-createRoomWithHost registry rid requestId actor name startWorker
+createRoomWithHost registry rid requestId actor name startWorker =
+  createRoomWithHostCommand
+    registry rid requestId actor
+    (Join actor name)
+    startWorker
+
+-- Tao phong va Host voi Appearance do nguoi choi chon.
+createRoomWithHostAppearance
+  :: RoomRegistry
+  -> RoomId
+  -> RequestId
+  -> PlayerId
+  -> String
+  -> Appearance
+  -> (RoomRuntime -> IO ())
+  -> IO (Either CreateRoomError (RoomRuntime, GameState))
+createRoomWithHostAppearance registry rid requestId actor name appearance startWorker =
+  createRoomWithHostCommand
+    registry rid requestId actor
+    (JoinWithAppearance actor name appearance)
+    startWorker
+
+-- Tao phong bang Command da chon.
+-- Chi cong bo phong sau khi Host Join thanh cong.
+createRoomWithHostCommand
+  :: RoomRegistry
+  -> RoomId
+  -> RequestId
+  -> PlayerId
+  -> Command
+  -> (RoomRuntime -> IO ())
+  -> IO (Either CreateRoomError (RoomRuntime, GameState))
+createRoomWithHostCommand registry rid requestId actor joinCommand startWorker
   | null rid || length rid > 32 || any isSpace rid =
       pure (Left InvalidRoomId)
 
@@ -412,7 +451,7 @@ createRoomWithHost registry rid requestId actor name startWorker
                 QueuedCommand
                   { queuedRequestId = requestId
                   , queuedActorId = actor
-                  , queuedCommand = Join actor name
+                  , queuedCommand = joinCommand
                   , queuedReply = reply
                   }
 
