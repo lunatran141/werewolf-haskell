@@ -155,7 +155,7 @@ test('Hòa/không phiếu và vòng mới hiển thị đúng, xóa tally dù Da
   assert.match(get('vote-result').textContent, /Không có phiếu/);
 });
 
-test('Hunter được bỏ qua; role chỉ hiện khi nhận reveal công khai', () => {
+test('Hunter được bỏ qua; vai người chết vẫn ẩn trước GameOver', () => {
   const {get, connection, message, snapshot} = setup();
   message({type: 'YourRole', roomId: 'R', role: 'Hunter'});
   snapshot({canShoot: true, resolved: true});
@@ -166,7 +166,8 @@ test('Hunter được bỏ qua; role chỉ hiện khi nhận reveal công khai',
   assert.deepEqual(connection.sent[0].choice, {action: 'HunterPass'});
   assert.equal(get('vote-reveals').children.length, 0);
   message({type: 'PlayerRoleRevealed', roomId: 'R', playerId: 'p2', role: 'Hunter', team: 'Village'});
-  assert.match(get('vote-reveals').children[0].textContent, /Hai.*Hunter/);
+  assert.equal(get('vote-reveals').children.length, 0);
+  assert.equal(get('revealed-role-list').children.length, 0);
 });
 
 test('Sai phase, người chết và mất kết nối đều khóa thao tác', () => {

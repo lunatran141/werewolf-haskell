@@ -9,9 +9,9 @@
     href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
     rel="stylesheet"
   >
-  <link rel="stylesheet" href="style.css?ui=20261014f">
+  <link rel="stylesheet" href="style.css?ui=20261015a">
   <script src="avatar.js?ui=20261014b" defer></script>
-  <script src="app.js?ui=20261014f" defer></script>
+  <script src="app.js?ui=20261015a" defer></script>
 </head>
 <body>
   <div id="twinkling-stars" class="twinkling-stars" aria-hidden="true"></div>
@@ -189,7 +189,7 @@
           </form>
           <p id="vote-result" role="status" aria-live="polite"></p>
           <ul id="vote-tally" aria-label="Kết quả kiểm phiếu"></ul>
-          <ul id="vote-reveals" aria-label="Vai của người đã bị loại"></ul>
+          <ul id="vote-reveals" aria-label="Thông tin loại người chơi"></ul>
         </section>
 
         <!-- Dashboard dùng dữ liệu thật từ server, không dùng người chơi giả của folder UI. -->
@@ -279,6 +279,7 @@
             <section>
               <h3>4. Ban ngày và trò chuyện</h3>
               <p>Sau khi đêm được xử lý, mọi người biết ai đã bị loại và những người <strong>còn sống</strong> được chat chung để thảo luận. Người đã chết chỉ theo dõi, không gửi chat. Không gửi chat chung trong Lobby, Đêm, Bỏ phiếu hoặc sau khi ván kết thúc.</p>
+              <p>Khung trò chuyện có mục <strong>Ngày 1, Ngày 2…</strong> để xem lại tin theo ngày. Sói có tab chat riêng theo đêm; tin ở đó chỉ dành cho Sói còn sống. Tính năng gửi và khôi phục chat Sói cần Server hỗ trợ trước khi dùng trong ván chơi.</p>
               <p>Thông tin riêng như kết quả soi, mục tiêu bảo vệ, thuốc của Phù thủy và lựa chọn của Sói không được công bố trong chat hệ thống. Bạn có thể tự nói về vai của mình, nhưng người khác phải tự đánh giá lời nói đó có đáng tin hay không.</p>
             </section>
             <section>
@@ -601,10 +602,16 @@
             </p>
           </section>
 
-        <!-- T07 Day Chat -->
+        <!-- T07: UI lịch sử chat, chưa phải bộ nhớ bền vững của Server. -->
         <section id="day-section" class="lobby-card" hidden>
-          <p class="section-label">GIAI ĐOẠN BAN NGÀY</p>
-          <h2>Thảo luận</h2>
+          <p class="section-label">TRÒ CHUYỆN</p>
+          <h2 id="chat-heading">Chat chung · Ngày 1</h2>
+          <div class="chat-tabs" role="group" aria-label="Kênh trò chuyện">
+            <button id="chat-public-tab" type="button" aria-pressed="true">Chat chung</button>
+            <button id="chat-wolves-tab" type="button" aria-pressed="false" hidden>Chat Sói</button>
+          </div>
+          <label for="chat-day-select" class="form-label">Xem lịch sử theo ngày</label>
+          <select id="chat-day-select" class="form-control chat-day-select"></select>
           <div id="chat-messages" class="chat-messages" aria-live="polite"></div>
           <form id="chat-form" class="chat-form">
             <label for="chat-input" class="form-label">Tin nhắn</label>

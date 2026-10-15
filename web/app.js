@@ -30,6 +30,7 @@ const state = {
   error: "",
   phase: "Lobby",
   selfRole: null,
+  selfAbility: null,
   nightActionDone: false,
   nightMessage: "",
   seerResult: null,
@@ -40,6 +41,8 @@ const state = {
   hunterActionDone: false,
   hunterMessage: "",
   chatMessages: [],
+  chatDay: null,
+  chatChannel: "PublicDay",
   appearance: null
 };
 
@@ -107,6 +110,10 @@ const el = {
   nightWaitingPanel: document.querySelector("#night-waiting-panel"),
   daySection: document.querySelector("#day-section"),
   chatMessages: document.querySelector("#chat-messages"),
+  chatDaySelect: document.querySelector("#chat-day-select"),
+  chatPublicTab: document.querySelector("#chat-public-tab"),
+  chatWolvesTab: document.querySelector("#chat-wolves-tab"),
+  chatHeading: document.querySelector("#chat-heading"),
   chatForm: document.querySelector("#chat-form"),
   chatInput: document.querySelector("#chat-input"),
   chatSubmit: document.querySelector("#chat-submit"),
@@ -229,7 +236,11 @@ function renderDashboardPlayers() {
       help.textContent = "Khả năng của tôi";
       help.addEventListener("click", () => {
         document.getElementById("role-help-title").textContent = role.textContent;
-        document.getElementById("role-help-text").textContent = roleHelp[state.selfRole] || "Chưa có hướng dẫn.";
+        const ability = state.selfAbility;
+        document.getElementById("role-help-text").textContent = ability
+          ? [ability.description, ability.phase && `Giai đoạn: ${ability.phase}`,
+            ability.targetRules && `Mục tiêu: ${ability.targetRules}`].filter(Boolean).join("\n")
+          : roleHelp[state.selfRole] || "Chưa có hướng dẫn.";
         el.roleDialog.showModal();
       });
       item.append(role, help);
@@ -350,11 +361,7 @@ function renderVoting() {
     voteEl["vote-tally"].appendChild(item);
   }
   voteEl["vote-reveals"].replaceChildren();
-  for (const reveal of voting.reveals) {
-    const item = document.createElement("li");
-    item.textContent = `${playerLabel(reveal.playerId)} đã bị loại — ${reveal.role} (${reveal.team})`;
-    voteEl["vote-reveals"].appendChild(item);
-  }
+  // Không công khai vai khi bị loại; danh sách vai chỉ có ở GameOver.
 }
 
 function normalizePlayerName(name) {
@@ -378,6 +385,7 @@ function getPlayerName(playerId) {
 function resetNightState() {
   state.phase = "Lobby";
   state.selfRole = null;
+  state.selfAbility = null;
   state.nightActionDone = false;
   state.nightMessage = "";
   state.seerResult = null;
@@ -388,6 +396,8 @@ function resetNightState() {
   state.hunterActionDone = false;
   state.hunterMessage = "";
   state.chatMessages = [];
+  state.chatDay = null;
+  state.chatChannel = "PublicDay";
 }
 
 function resetRoomState() {
@@ -661,26 +671,56 @@ function render() {
 }
 
 function renderDay() {
-  const isDay = state.selfPlayerId !== null && state.phase === "Day";
-  el.daySection.hidden = !isDay;
-  if (!isDay) return;
+  const inGame = state.selfPlayerId !== null && state.phase !== "Lobby";
+  el.daySection.hidden = !inGame;
+  if (!inGame) return;
+
+  const isWolf = state.selfRole === "Werewolf";
+  if (!isWolf && state.chatChannel === "WolvesNight") state.chatChannel = "PublicDay";
+  el.chatWolvesTab.hidden = !isWolf;
+  el.chatPublicTab.setAttribute("aria-pressed", String(state.chatChannel === "PublicDay"));
+  el.chatWolvesTab.setAttribute("aria-pressed", String(state.chatChannel === "WolvesNight"));
+  el.chatPublicTab.classList.toggle("is-active", state.chatChannel === "PublicDay");
+  el.chatWolvesTab.classList.toggle("is-active", state.chatChannel === "WolvesNight");
+
+  const days = new Set(state.chatMessages.filter(chat => chat.channel === state.chatChannel)
+    .map(chat => chat.day));
+  if (Number.isInteger(voting.day) && voting.day > 0) days.add(voting.day);
+  const currentDay = state.chatDay ?? (voting.day > 0 ? voting.day : 1);
+  days.add(currentDay);
+  el.chatDaySelect.replaceChildren();
+  for (const day of [...days].sort((a, b) => a - b)) {
+    const option = document.createElement("option");
+    option.value = String(day);
+    option.textContent = `Ngày ${day}`;
+    el.chatDaySelect.appendChild(option);
+  }
+  el.chatDaySelect.value = String(currentDay);
+  el.chatHeading.textContent = `${state.chatChannel === "WolvesNight" ? "Chat Sói · Đêm" : "Chat chung · Ngày"} ${currentDay}`;
 
   el.chatMessages.replaceChildren();
-  for (const chat of state.chatMessages) {
+  const visible = state.chatMessages.filter(chat => chat.day === currentDay &&
+    chat.channel === state.chatChannel).sort((a, b) => a.sequence - b.sequence);
+  for (const chat of visible) {
     const line = document.createElement("p");
     const author = document.createElement("strong");
     author.textContent = `${getPlayerName(chat.playerId)}: `;
     line.append(author, document.createTextNode(chat.message));
     el.chatMessages.appendChild(line);
   }
+  if (visible.length === 0) el.chatMessages.textContent = "Chưa có tin nhắn cho mục này.";
 
-  const canChat = getSelfPlayer()?.alive === true;
+  const isCurrentDay = currentDay === voting.day;
+  // Lệnh Chat hiện tại của Server chỉ nhận chat chung ban ngày.
+  const canChat = getSelfPlayer()?.alive === true && isCurrentDay &&
+    state.chatChannel === "PublicDay" && state.phase === "Day";
   const busy = state.pending !== null;
   el.chatInput.disabled = !state.connected || busy || !canChat;
   el.chatSubmit.disabled = !state.connected || busy || !canChat || !el.chatInput.value.trim();
-  el.chatStatus.textContent = canChat
-    ? "Bạn có thể thảo luận ban ngày."
-    : "Bạn đã bị loại và chỉ có thể xem thảo luận.";
+  el.chatStatus.textContent = state.chatChannel === "WolvesNight"
+    ? "Chat Sói đang chờ Server hỗ trợ gửi và cấp lịch sử riêng."
+    : canChat ? "Bạn có thể thảo luận ban ngày."
+    : "Đang xem lịch sử; chỉ người còn sống mới gửi được ở ban ngày hiện tại.";
 }
 
 function renderResult() {
@@ -821,6 +861,24 @@ function handlePhaseChanged(phase) {
   }
 }
 
+function receiveChat(chat) {
+  const day = Number(chat.day ?? voting.day);
+  const channel = chat.channel || "PublicDay";
+  const playerId = chat.senderId ?? chat.playerId;
+  const message = chat.text ?? chat.message;
+  if (!Number.isInteger(day) || day < 1 || !["PublicDay", "WolvesNight"].includes(channel)) return;
+  if (channel === "WolvesNight" && state.selfRole !== "Werewolf") return;
+  if (typeof message !== "string" || !playerId) return;
+  if (state.chatMessages.some(item => item.day === day && item.channel === channel &&
+    (chat.messageId != null && item.messageId === chat.messageId ||
+      Number.isInteger(chat.sequence) && item.sequence === chat.sequence))) return;
+  state.chatMessages.push({
+    day, channel, messageId: chat.messageId ?? null,
+    sequence: Number.isInteger(chat.sequence) ? chat.sequence : state.chatMessages.length,
+    playerId, message
+  });
+}
+
 function handleServerMessage(message) {
   // Không áp dụng thông điệp của phòng khác vào UI đang mở.
   if (message.roomId && state.roomId && message.roomId !== state.roomId && message.type !== "LobbySnapshot") return;
@@ -923,6 +981,8 @@ function handleServerMessage(message) {
     case "YourRole":
       if (message.roomId === state.roomId) {
         state.selfRole = message.role;
+        state.selfAbility = message.ability && typeof message.ability.description === "string"
+          ? message.ability : null;
         state.nightMessage =
           "Bạn đã nhận vai trò từ Server.";
       }
@@ -989,14 +1049,16 @@ function handleServerMessage(message) {
       }
       break;
 
-    case "PlayerRoleRevealed":
+    case "PlayerDied":
+    case "PlayerEliminated":
       if (message.roomId === state.roomId) {
-        if (!voting.reveals.some(p => p.playerId === message.playerId)) voting.reveals.push(message);
-        state.revealedRoles[message.playerId] = {
-          role: message.role,
-          team: message.team
-        };
+        state.players = state.players.map(player => player.playerId === message.playerId
+          ? {...player, alive: false} : player);
       }
+      break;
+
+    case "PlayerRoleRevealed":
+      // Legacy event: không đưa vai người chết lên UI trước GameOver.
       break;
 
     case "PhaseChanged":
@@ -1016,12 +1078,27 @@ function handleServerMessage(message) {
       }
       break;
 
+    case "GameRolesRevealed":
+      if (message.roomId === state.roomId && state.phase === "GameOver" && Array.isArray(message.roles)) {
+        state.revealedRoles = {};
+        for (const entry of message.roles) {
+          if (entry && entry.playerId && roleNames[entry.role]) {
+            state.revealedRoles[entry.playerId] = {role: entry.role};
+          }
+        }
+      }
+      break;
+
     case "ChatMessage":
       if (message.roomId === state.roomId) {
-        state.chatMessages.push({
-          playerId: message.playerId,
-          message: message.message
-        });
+        receiveChat(message);
+      }
+      break;
+
+    case "ChatHistorySnapshot":
+      // Chỉ hiện dữ liệu lịch sử Server cấp cho chính kết nối này; không tự suy vai hay kênh.
+      if (message.roomId === state.roomId && Array.isArray(message.messages)) {
+        for (const chat of message.messages) receiveChat(chat);
       }
       break;
 
@@ -1247,10 +1324,25 @@ el.hunterPass.addEventListener("click", () => {
 });
 
 el.chatInput.addEventListener("input", render);
+el.chatDaySelect.addEventListener("change", () => {
+  state.chatDay = Number(el.chatDaySelect.value);
+  renderDay();
+});
+el.chatPublicTab.addEventListener("click", () => {
+  state.chatChannel = "PublicDay";
+  renderDay();
+});
+el.chatWolvesTab.addEventListener("click", () => {
+  if (state.selfRole === "Werewolf") {
+    state.chatChannel = "WolvesNight";
+    renderDay();
+  }
+});
 el.chatForm.addEventListener("submit", event => {
   event.preventDefault();
   const message = el.chatInput.value.trim();
-  if (state.phase === "Day" && getSelfPlayer()?.alive === true && message) {
+  if (state.phase === "Day" && state.chatChannel === "PublicDay" &&
+      (state.chatDay ?? voting.day) === voting.day && getSelfPlayer()?.alive === true && message) {
     sendCommand("Chat", { message });
   }
 });

@@ -38,6 +38,12 @@
   background: rgba(0, 0, 0, 0.18);
 }
 
+.chat-tabs { display: flex; gap: 0.5rem; margin: 0.9rem 0; }
+.chat-tabs button { border: 1px solid var(--border); border-radius: 0.55rem; padding: 0.45rem 0.75rem; color: var(--text); background: rgba(0, 0, 0, 0.22); }
+.chat-tabs button.is-active { background: #49357c; border-color: var(--accent); }
+.chat-day-select { margin-bottom: 0.9rem; }
+#role-help-text { white-space: pre-line; }
+
 .chat-messages p,
 .revealed-role-list p {
   margin-bottom: 0.5rem;
