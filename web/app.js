@@ -269,6 +269,7 @@ function saveAppearance() {
   try {
     localStorage.setItem("werewolf-appearance", JSON.stringify(state.appearance));
   } catch { /* Trình duyệt có thể chặn lưu trữ ở file://; vẫn cho vào phòng. */ }
+  return state.appearance;
 }
 
 function targetSelectionContext() {
@@ -1544,8 +1545,9 @@ el.joinForm.addEventListener("submit", event => {
   const fields = readRoomForm();
 
   if (fields) {
-    saveAppearance();
-    sendCommand(state.entranceMode === "host" ? "CreateRoom" : "JoinGame", fields);
+    const appearance = saveAppearance();
+    sendCommand(state.entranceMode === "host" ? "CreateRoom" : "JoinGame",
+      {...fields, appearance});
   }
 });
 
@@ -1553,8 +1555,8 @@ el.createButton.addEventListener("click", () => {
   const fields = readRoomForm();
 
   if (fields) {
-    saveAppearance();
-    sendCommand("CreateRoom", fields);
+    const appearance = saveAppearance();
+    sendCommand("CreateRoom", {...fields, appearance});
   }
 });
 
