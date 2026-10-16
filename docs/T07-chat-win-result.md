@@ -48,6 +48,9 @@ T07 không cho trình duyệt tự quyết định vai trò, mục tiêu hợp l
 ### Thời gian và chuyển giai đoạn
 
 - Day có 180 giây thảo luận, sau đó Server tự chuyển sang Voting.
+- Mỗi người còn sống có thể bấm **Đồng ý chuyển sang bỏ phiếu** một lần. Chỉ
+  khi 100% người còn sống đồng ý, Server mới bỏ qua thời gian còn lại và chuyển
+  ngay sang Voting; nếu chưa đủ người, đồng hồ 180 giây tiếp tục chạy.
 - Voting có 60 giây; hết giờ Server tự chốt kể cả khi chưa đủ phiếu.
 - Đồng hồ dùng thời hạn từ Server và không tự reset khi nhận snapshot mới hoặc reconnect.
 - UI chỉ mở nút chat, chọn mục tiêu và gửi hành động ở đúng phase.
@@ -83,6 +86,8 @@ Các loại dữ liệu chính được sử dụng:
 - `WolfVoteUpdated`: tiến độ lựa chọn mục tiêu của Sói.
 - `WolfTargetLocked`: mục tiêu cuối đã được Server khóa.
 - `PrivateActionState`: trạng thái hành động/thuốc/Bảo vệ riêng của người nhận.
+- `SkipDiscussion` / `DiscussionSkipState`: xác nhận bỏ qua thảo luận và tiến
+  độ đồng thuận do Server quản lý.
 - `PlayerDied`: chỉ công khai ID người chết, không kèm vai.
 - `GameFinished`: kết quả thắng/thua/hòa.
 - `GameRolesRevealed`: công khai vai trò toàn bộ người chơi tại GameOver.
@@ -157,8 +162,8 @@ Mở `http://localhost:5500`. Server game lắng nghe WebSocket ở cổng 8080;
 
 ## Trạng thái xác nhận gần nhất
 
-- `test/T07UiSpec.cjs`: 18/18 trường hợp PASS.
-- `t07-win-test`: bộ test đã biên dịch chạy 36/36 trường hợp PASS.
+- `test/T07UiSpec.cjs`: 21/21 trường hợp PASS.
+- `t07-win-test`: bộ test đã biên dịch chạy 41/41 trường hợp PASS.
 - `protocol-lobby-test`: bộ test đã biên dịch chạy 46/46 trường hợp PASS.
 - `git diff --check`: không có lỗi whitespace; Windows có thể cảnh báo chuyển LF thành CRLF.
 - Cần chạy lại `cabal test all` sau khi Cabal trên máy hoạt động bình thường để có bằng chứng clean build cuối cùng trước merge PR.

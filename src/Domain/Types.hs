@@ -170,6 +170,7 @@ data Command
   | Vote PlayerId PlayerId
   | Chat PlayerId String
   | ChatInChannel PlayerId ChatChannel String
+  | SkipDiscussion PlayerId
   | ResolveNight
   | ResolveVoting
   | ResolveHunter PlayerId (Maybe PlayerId)
@@ -185,6 +186,7 @@ data GameError
   | InvalidRoleConfiguration | InvalidGameState
   | AbilityAlreadyUsed | HunterNotPending | InvalidTiePolicy
   | DuplicateNightAction | EmptyChat | ChatTooLong | NotReady
+  | AlreadySkippedDiscussion
   -- T06: Một request đã thành công không được phát lại ở vòng sau.
   | DuplicateRequest
   | InvalidAppearance
@@ -256,6 +258,7 @@ data GameState = GameState
   , gamePhase            :: Phase
   , gameDay              :: Int
   , gameVotes            :: [(PlayerId, PlayerId)]
+  , gameDiscussionSkips  :: [PlayerId]
   , gameNightActions     :: [(PlayerId, NightChoice)]
   , gameWolfVotingClosed :: Bool
   , gameConfiguredRoles  :: [Role]
@@ -280,6 +283,7 @@ emptyLobby = GameState
   , gamePhase = Lobby
   , gameDay = 0
   , gameVotes = []
+  , gameDiscussionSkips = []
   , gameNightActions = []
   , gameWolfVotingClosed = False
   , gameConfiguredRoles = []

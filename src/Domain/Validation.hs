@@ -599,6 +599,8 @@ validateGameInvariant game = do
 
           && not (hasDuplicates (map fst (gameNightActions game)))
 
+          && not (hasDuplicates (gameDiscussionSkips game))
+
       refsOk =
 
         all (\(actor, target) -> actor `elem` ids && target `elem` ids)
@@ -610,6 +612,20 @@ validateGameInvariant game = do
                  (gameNightActions game)
 
           && all (`elem` ids) (gamePendingReveals game)
+
+          && all (`elem` ids) (gameDiscussionSkips game)
+
+      discussionSkipsOk =
+
+        all
+
+          (\pid -> maybe False ((== Alive) . playerLifeStatus)
+
+            (validateById pid ps))
+
+          (gameDiscussionSkips game)
+
+          && (gamePhase game == Day || null (gameDiscussionSkips game))
 
       pendingRevealsOk =
 
@@ -665,6 +681,8 @@ validateGameInvariant game = do
 
   if hostOk && uniqueActors && refsOk && pendingRevealsOk && voteEntriesOk
 
+      && discussionSkipsOk
+
     then Right ()
 
     else Left InvalidGameState
@@ -712,6 +730,8 @@ validateGameInvariant game = do
           && gameDay game == 0
 
           && null (gameVotes game)
+
+          && null (gameDiscussionSkips game)
 
           && null (gameNightActions game)
 
