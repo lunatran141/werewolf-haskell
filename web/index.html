@@ -361,6 +361,14 @@
             <p class="card-description">
               Chọn một người chơi hợp lệ để tấn công trong đêm.
             </p>
+            <div
+              id="wolf-vote-status"
+              class="night-result-panel wolf-vote-status mb-3"
+              role="status"
+              aria-live="polite"
+            >
+              Hãy cùng các Sói còn sống chốt một mục tiêu.
+            </div>
             <label for="wolf-target" class="form-label">
               Mục tiêu
             </label>
@@ -561,36 +569,38 @@
               </p>
             </div>
 
-            <label for="hunter-target" class="form-label">
-              Người muốn bắn
-            </label>
-            <select
-              id="hunter-target"
-              class="form-select mb-3"
-              disabled
-            >
-              <option value="">
-                -- Chọn người chơi còn sống --
-              </option>
-            </select>
+            <div id="hunter-choice-panel" hidden>
+              <label for="hunter-target" class="form-label">
+                Người muốn bắn
+              </label>
+              <select
+                id="hunter-target"
+                class="form-select mb-3"
+                disabled
+              >
+                <option value="">
+                  -- Chọn người chơi còn sống --
+                </option>
+              </select>
 
-            <button
-              id="hunter-shoot"
-              class="btn main-button w-100 mb-3"
-              type="button"
-              disabled
-            >
-              Bắn người đã chọn
-            </button>
+              <button
+                id="hunter-shoot"
+                class="btn main-button w-100 mb-3"
+                type="button"
+                disabled
+              >
+                Bắn người đã chọn
+              </button>
 
-            <button
-              id="hunter-pass"
-              class="btn leave-button w-100"
-              type="button"
-              disabled
-            >
-              Bỏ lượt bắn
-            </button>
+              <button
+                id="hunter-pass"
+                class="btn leave-button w-100"
+                type="button"
+                disabled
+              >
+                Bỏ lượt bắn
+              </button>
+            </div>
 
             <p
               id="hunter-status"
@@ -598,14 +608,20 @@
               role="status"
               aria-live="polite"
             >
-              Đang chờ thông báo từ Server.
+              Bạn đang còn sống; quyền bắn chưa được kích hoạt.
             </p>
           </section>
 
-        <!-- T07: UI lịch sử chat, chưa phải bộ nhớ bền vững của Server. -->
+        <!-- T07: Lịch sử chat được Server lưu theo ngày và theo kênh. -->
         <section id="day-section" class="lobby-card" hidden>
           <p class="section-label">TRÒ CHUYỆN</p>
           <h2 id="chat-heading">Chat chung · Ngày 1</h2>
+          <div id="day-clock" class="day-clock" role="timer"
+            aria-label="Thời gian thảo luận còn lại" hidden>
+            <span id="day-clock-label" class="day-clock-label">Thời gian thảo luận</span>
+            <strong id="day-clock-value">03:00</strong>
+            <div class="day-clock-track"><span id="day-clock-bar"></span></div>
+          </div>
           <div class="chat-tabs" role="group" aria-label="Kênh trò chuyện">
             <button id="chat-public-tab" type="button" aria-pressed="true">Chat chung</button>
             <button id="chat-wolves-tab" type="button" aria-pressed="false" hidden>Chat Sói</button>

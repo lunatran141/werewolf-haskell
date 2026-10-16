@@ -17,14 +17,22 @@
 .voting-card ul { padding-left: 20px; overflow-wrap: anywhere; }
 .voting-card [role="status"] { margin-top: 16px; }
 .voting-card button:disabled { opacity: 0.55; cursor: not-allowed; }
-.vote-clock { margin: 16px 0; padding: 12px 14px; border: 1px solid rgba(205, 185, 255, 0.35); border-radius: 12px; background: rgba(8, 12, 35, 0.65); }
-.vote-clock-label { color: #d4cce8; font-size: 13px; }
-.vote-clock strong { float: right; color: #c9f6ff; font-variant-numeric: tabular-nums; font-size: 22px; line-height: 1; }
-.vote-clock-track { clear: both; height: 7px; margin-top: 12px; overflow: hidden; border-radius: 999px; background: rgba(255, 255, 255, 0.12); }
-.vote-clock-track span { display: block; width: 100%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #37b8ef, #bd9bff); transition: width 0.25s linear; }
-.vote-clock.is-urgent { border-color: #ef8798; }
-.vote-clock.is-urgent strong { color: #ffa1ae; animation: urgent-pulse 0.8s ease-in-out infinite alternate; }
-.vote-clock.is-urgent .vote-clock-track span { background: #f37891; }
+.vote-clock,
+.day-clock { margin: 16px 0; padding: 12px 14px; border: 1px solid rgba(205, 185, 255, 0.35); border-radius: 12px; background: rgba(8, 12, 35, 0.65); }
+.vote-clock-label,
+.day-clock-label { color: #d4cce8; font-size: 13px; }
+.vote-clock strong,
+.day-clock strong { float: right; color: #c9f6ff; font-variant-numeric: tabular-nums; font-size: 22px; line-height: 1; }
+.vote-clock-track,
+.day-clock-track { clear: both; height: 7px; margin-top: 12px; overflow: hidden; border-radius: 999px; background: rgba(255, 255, 255, 0.12); }
+.vote-clock-track span,
+.day-clock-track span { display: block; width: 100%; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #37b8ef, #bd9bff); transition: width 0.25s linear; }
+.vote-clock.is-urgent,
+.day-clock.is-urgent { border-color: #ef8798; }
+.vote-clock.is-urgent strong,
+.day-clock.is-urgent strong { color: #ffa1ae; animation: urgent-pulse 0.8s ease-in-out infinite alternate; }
+.vote-clock.is-urgent .vote-clock-track span,
+.day-clock.is-urgent .day-clock-track span { background: #f37891; }
 @keyframes urgent-pulse { to { opacity: 0.5; } }
 
 .chat-messages {
@@ -42,6 +50,20 @@
 .chat-tabs button { border: 1px solid var(--border); border-radius: 0.55rem; padding: 0.45rem 0.75rem; color: var(--text); background: rgba(0, 0, 0, 0.22); }
 .chat-tabs button.is-active { background: #49357c; border-color: var(--accent); }
 .chat-day-select { margin-bottom: 0.9rem; }
+.chat-day-marker {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  margin: 0.25rem 0 0.9rem;
+  color: var(--accent);
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.chat-day-marker::before,
+.chat-day-marker::after { content: ""; flex: 1; height: 1px; background: rgba(217, 187, 255, 0.32); }
+.chat-empty { color: var(--muted); font-style: italic; }
 #role-help-text { white-space: pre-line; }
 
 .chat-messages p,
@@ -515,6 +537,22 @@ body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
 }
 .dashboard-card.is-me { border-color: #e2bfff; box-shadow: 0 0 0 2px rgba(210, 166, 255, 0.45); }
 .dashboard-card.is-ready { border-color: #78dba8; }
+.dashboard-card.is-targetable {
+  cursor: pointer;
+  border-color: rgba(125, 211, 252, 0.85);
+  transition: border-color 140ms ease, box-shadow 140ms ease, transform 140ms ease;
+}
+.dashboard-card.is-targetable:hover,
+.dashboard-card.is-targetable:focus-visible {
+  outline: none;
+  border-color: #7dd3fc;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.28), 0 10px 24px rgba(0, 0, 0, 0.3);
+  transform: translateY(-2px);
+}
+.dashboard-card.is-selected-target {
+  border-color: #f0abfc;
+  box-shadow: 0 0 0 4px rgba(232, 121, 249, 0.38), 0 10px 26px rgba(0, 0, 0, 0.35);
+}
 .dashboard-card.is-empty { justify-content: center; color: #aaa6c5; border-style: dashed; background: rgba(255, 255, 255, 0.035); text-align: center; font-size: 12px; }
 .dashboard-card.is-dead::after {
   content: "";
@@ -526,6 +564,34 @@ body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
   opacity: 0.85;
 }
 .dashboard-card.is-dead .dashboard-avatar { filter: grayscale(1); opacity: 0.55; }
+.dashboard-chat-bubble {
+  position: absolute;
+  z-index: 4;
+  top: 34px;
+  left: 50%;
+  width: max-content;
+  max-width: calc(100% - 18px);
+  padding: 7px 10px;
+  overflow: hidden;
+  border: 1px solid rgba(226, 191, 255, 0.75);
+  border-radius: 12px 12px 12px 3px;
+  color: #17122c;
+  background: rgba(251, 247, 255, 0.96);
+  box-shadow: 0 7px 18px rgba(0, 0, 0, 0.35);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  animation: dashboard-chat-bubble 5s ease forwards;
+}
+
+@keyframes dashboard-chat-bubble {
+  0% { opacity: 0; transform: translate(-50%, 7px) scale(0.94); }
+  10%, 75% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -6px) scale(0.98); }
+}
 .dashboard-card-name {
   z-index: 1;
   max-width: 100%;
@@ -627,6 +693,15 @@ body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
 .appearance-fields label { color: #94a3b8; font-size: 11px; font-weight: 700; text-transform: uppercase; }
 .appearance-fields select { margin-top: 4px; min-height: 38px; padding: 5px 8px; border-color: #334155; border-radius: 8px; color: #fff; background: #020617; font-size: 12px; }
 .appearance-note { margin: 10px 0 0; color: #bbb1d4; font-size: 11px; }
+.wolf-vote-status {
+  margin: 0 0 16px;
+  padding: 12px 14px;
+  border: 1px solid rgba(244, 114, 182, 0.32);
+  border-radius: 12px;
+  color: #f5d0fe;
+  background: rgba(88, 28, 135, 0.2);
+  line-height: 1.5;
+}
 #join-section #join-button,
 #join-section .create-room-button {
   min-height: 50px;
@@ -731,6 +806,8 @@ body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
   .vote-clock.is-urgent strong {
     animation: none;
   }
+
+  .dashboard-chat-bubble { animation: none; }
 
   .player-card {
     transition: none;

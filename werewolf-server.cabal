@@ -234,3 +234,4 @@ test-suite t07-win-test
     , werewolf-server
     , hspec >=2.10
     , aeson >=2.1 && <2.3
+    , stm >=2.5 && <3

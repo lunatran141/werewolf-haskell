@@ -45,6 +45,7 @@ main = hspec $ do
             , MsgVotingResolved "R" [("p2", 1)] (Just "p2")
             , MsgVotingResolved "R" [] Nothing
             , MsgVotingSnapshot "R" Voting 1 [VotingPlayerView "p1" "Một" True] True False False Nothing
+            , MsgPhaseTimeRemaining "R" Day 1 125000
             ]
       map (eitherDecode . encodeServerMessage) messages `shouldBe` map Right messages
 

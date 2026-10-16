@@ -12,6 +12,7 @@ import Control.Concurrent.STM
   ( atomically
   , readTVar
   , writeTChan
+  , writeTVar
   )
 
 import Control.Monad (void)
@@ -25,8 +26,10 @@ import Domain.Types
   , DomainEvent(..)
   , GameState(..)
   , NightChoice(..)
+  , LifeStatus(..)
   , Phase(..)
   , Player(..)
+  , Role(..)
   , Team(..)
   )
 
@@ -58,6 +61,7 @@ import Test.Hspec
   , hspec
   , it
   , shouldBe
+  , shouldSatisfy
   )
 
 -- Cong WebSocket danh rieng cho test.
@@ -116,13 +120,22 @@ receiveMessage connection = do
             ("Khong doc duoc ServerMessage: " ++ err)
           fail err
 
+receiveUntil :: WS.Connection -> (ServerMessage -> Bool) -> IO ServerMessage
+receiveUntil connection predicate = do
+  message <- receiveMessage connection
+  if predicate message then pure message else receiveUntil connection predicate
+
+isLobbySnapshot :: ServerMessage -> Bool
+isLobbySnapshot MsgLobbySnapshot {} = True
+isLobbySnapshot _ = False
+
 -- Tao phong va lay PlayerId do Server cap.
 createRoom :: WS.Connection -> String -> IO String
 createRoom connection rid = do
   sendMessage connection
     (ClientCreateRoom "create" rid "SeerPlayer")
 
-  response <- receiveMessage connection
+  response <- receiveUntil connection isLobbySnapshot
 
   case response of
     MsgLobbySnapshot actualRoom selfId _ _ -> do
@@ -140,7 +153,7 @@ joinRoom connection rid = do
   sendMessage connection
     (ClientJoin "join" rid "OtherPlayer")
 
-  response <- receiveMessage connection
+  response <- receiveUntil connection isLobbySnapshot
 
   case response of
     MsgLobbySnapshot actualRoom selfId _ _ -> do
@@ -219,6 +232,7 @@ publishTestEvents room events =
         { updateVersion = currentVersion
         , updateState = currentState
         , updateEvents = events
+        , updateChatRecord = Nothing
         }
 
 -- Lay PlayerView theo ID tu danh sach cong khai.
@@ -250,6 +264,158 @@ main = do
   registry <- startTestServer
 
   hspec $ do
+
+    describe "T07 - WebSocket reconnect" $ do
+      it "giu nguyen PlayerId va snapshot khi noi lai bang token" $
+        withTestTimeout $ do
+          (originalPlayerId, sessionToken) <-
+            WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+              sendMessage connection
+                (ClientCreateRoom "reconnect-create" "ROOM-R01" "ReconnectPlayer")
+              established <- receiveUntil connection $ \message ->
+                case message of
+                  MsgSessionEstablished "ROOM-R01" _ _ -> True
+                  _ -> False
+              case established of
+                MsgSessionEstablished _ playerId token -> pure (playerId, token)
+                _ -> fail "Khong nhan duoc session token"
+
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect "reconnect" "ROOM-R01" sessionToken)
+            established <- receiveUntil connection $ \message ->
+              case message of
+                MsgSessionEstablished "ROOM-R01" _ _ -> True
+                _ -> False
+            established `shouldBe`
+              MsgSessionEstablished "ROOM-R01" originalPlayerId sessionToken
+
+            snapshot <- receiveUntil connection isLobbySnapshot
+            case snapshot of
+              MsgLobbySnapshot _ selfId _ players -> do
+                selfId `shouldBe` originalPlayerId
+                length players `shouldBe` 1
+              _ -> fail "Khong nhan duoc LobbySnapshot sau reconnect"
+
+      it "reconnect giua Day nhan dung thoi gian con lai, khong reset 3 phut" $
+        withTestTimeout $ do
+          (sessionToken, firstRemaining) <-
+            WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+              sendMessage connection
+                (ClientCreateRoom "timer-create" "ROOM-R02" "TimerPlayer")
+              established <- receiveUntil connection $ \message ->
+                case message of
+                  MsgSessionEstablished "ROOM-R02" _ _ -> True
+                  _ -> False
+              token <- case established of
+                MsgSessionEstablished _ _ value -> pure value
+                _ -> fail "Khong nhan duoc session token"
+
+              room <- requireRoom registry "ROOM-R02"
+              atomically $ do
+                state <- readTVar (roomState room)
+                writeTVar (roomState room) state {gamePhase = Day, gameDay = 1}
+
+              deadlineMessage <- receiveUntil connection $ \message ->
+                case message of
+                  MsgPhaseTimeRemaining "ROOM-R02" Day 1 _ -> True
+                  _ -> False
+              remaining <- case deadlineMessage of
+                MsgPhaseTimeRemaining _ _ _ value -> pure value
+                _ -> fail "Khong nhan duoc thoi gian Day"
+              pure (token, remaining)
+
+          threadDelay 250000
+
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect "timer-reconnect" "ROOM-R02" sessionToken)
+            deadlineMessage <- receiveUntil connection $ \message ->
+              case message of
+                MsgPhaseTimeRemaining "ROOM-R02" Day 1 _ -> True
+                _ -> False
+            case deadlineMessage of
+              MsgPhaseTimeRemaining _ _ _ remaining -> do
+                remaining `shouldSatisfy` (> 0)
+                remaining `shouldSatisfy` (< firstRemaining)
+              _ -> fail "Reconnect khong nhan duoc thoi gian Day"
+
+      it "reconnect khoi phuc action da gui va trang thai thuoc rieng" $
+        withTestTimeout $ do
+          (actor, sessionToken) <-
+            WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+              sendMessage connection
+                (ClientCreateRoom "private-create" "ROOM-R03" "WitchPlayer")
+              established <- receiveUntil connection $ \message ->
+                case message of
+                  MsgSessionEstablished "ROOM-R03" _ _ -> True
+                  _ -> False
+              case established of
+                MsgSessionEstablished _ playerId token -> pure (playerId, token)
+                _ -> fail "Khong nhan duoc session token"
+
+          room <- requireRoom registry "ROOM-R03"
+          atomically $ do
+            state <- readTVar (roomState room)
+            let players =
+                  [ player {playerRole = Just Witch}
+                  | player <- gamePlayers state
+                  ]
+            writeTVar (roomState room) state
+              { gamePlayers = players
+              , gamePhase = Night
+              , gameDay = 1
+              , gameNightActions = [(actor, WitchPass)]
+              , gameWitchHealReady = False
+              , gameWitchPoisonReady = True
+              }
+
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect "private-reconnect" "ROOM-R03" sessionToken)
+            privateState <- receiveUntil connection $ \message ->
+              case message of
+                MsgPrivateActionState "ROOM-R03" _ _ _ _ -> True
+                _ -> False
+            privateState `shouldBe`
+              MsgPrivateActionState "ROOM-R03" True (Just False) (Just True) Nothing
+
+      it "danh sach dong doi Soi chi duoc phuc hoi cho ket noi Soi" $
+        withTestTimeout $ do
+          (actor, sessionToken) <-
+            WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+              sendMessage connection
+                (ClientCreateRoom "wolf-team-create" "ROOM-R04" "WolfPlayer")
+              established <- receiveUntil connection $ \message ->
+                case message of
+                  MsgSessionEstablished "ROOM-R04" _ _ -> True
+                  _ -> False
+              case established of
+                MsgSessionEstablished _ playerId token -> pure (playerId, token)
+                _ -> fail "Khong nhan duoc session token"
+
+          room <- requireRoom registry "ROOM-R04"
+          atomically $ do
+            state <- readTVar (roomState room)
+            let actorPlayers =
+                  [ player {playerRole = Just Werewolf}
+                  | player <- gamePlayers state
+                  ]
+                teammate = Player "wolf-2" "Wolf Two" (Just Werewolf) False Alive defaultAppearance
+            writeTVar (roomState room) state
+              { gamePlayers = actorPlayers ++ [teammate]
+              , gamePhase = Night
+              , gameDay = 1
+              }
+
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect "wolf-team-reconnect" "ROOM-R04" sessionToken)
+            team <- receiveUntil connection $ \message ->
+              case message of
+                MsgWolfTeam "ROOM-R04" _ -> True
+                _ -> False
+            team `shouldBe` MsgWolfTeam "ROOM-R04" [actor, "wolf-2"]
 
     -- Giu nguyen cac test T05 WebSocket.
     describe "T05 - WebSocket NightAction" $ do
@@ -378,7 +544,7 @@ main = do
                   "HostVan"
                   customAppearance)
 
-              response <- receiveMessage connection
+              response <- receiveUntil connection isLobbySnapshot
 
               case response of
                 MsgLobbySnapshot rid selfId hostId players -> do
@@ -434,7 +600,7 @@ main = do
                       "JoinBinh"
                       customAppearance)
 
-                  response <- receiveMessage joinConnection
+                  response <- receiveUntil joinConnection isLobbySnapshot
 
                   case response of
                     MsgLobbySnapshot rid joinId actualHostId players -> do

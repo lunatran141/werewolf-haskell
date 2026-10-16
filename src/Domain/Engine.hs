@@ -17,6 +17,7 @@ import Domain.Validation
   , validateStartGame
   , validateNightAction
   , validateChat
+  , validateChatInChannel
   , validateHunterShot
   , validatePlayerAlive
   , validatePlayerExists
@@ -495,6 +496,7 @@ applyCommand state command
         NightAction _ _ -> applyNightCommand state command
         Vote actor target -> castVote state actor target
         Chat actor message -> sendChat state actor message
+        ChatInChannel actor channel message -> sendChatInChannel state actor channel message
         ResolveNight -> applyNightCommand state command
         ResolveVoting -> resolveVoting state
         ResolveHunter actor target -> resolveHunterShot state actor target
@@ -655,6 +657,20 @@ sendChat
 sendChat state actor message = do
   validateChat state actor message
   pure (state, [ChatMessage actor (normalizePlayerName message)])
+
+-- T07: Chat có kênh; WolvesNight được EventVisibility giới hạn cho phe Sói.
+sendChatInChannel
+  :: GameState
+  -> PlayerId
+  -> ChatChannel
+  -> String
+  -> Either GameError (GameState, [DomainEvent])
+sendChatInChannel state actor channel message = do
+  validateChatInChannel state actor channel message
+  pure
+    ( state
+    , [ChatMessageInChannel channel actor (normalizePlayerName message)]
+    )
 
 markDead :: PlayerId -> [Player] -> [Player]
 markDead targetId = map mark

@@ -363,6 +363,24 @@ main = hspec $ do
       map (eitherDecode . encodeServerMessage) messages
         `shouldBe` map Right messages
 
+    it "E03b - Tien do va ket qua khoa phieu Soi round-trip" $ do
+      let messages =
+            [ MsgWolfTeam "ROOM-01" ["p1", "p3", "p5"]
+            , MsgWolfVoteUpdated "ROOM-01" 2 3
+            , MsgWolfTargetLocked "ROOM-01" (Just "p7")
+            , MsgWolfTargetLocked "ROOM-01" Nothing
+            ]
+      map (eitherDecode . encodeServerMessage) messages
+        `shouldBe` map Right messages
+
+    it "E03c - Trang thai action rieng khi reconnect round-trip" $ do
+      let messages =
+            [ MsgPrivateActionState "ROOM-01" True (Just False) (Just True) Nothing
+            , MsgPrivateActionState "ROOM-01" False Nothing Nothing (Just "p4")
+            ]
+      map (eitherDecode . encodeServerMessage) messages
+        `shouldBe` map Right messages
+
     it "E04 - NightResolved round-trip" $ do
       let message = MsgNightResolved "ROOM-01" ["p7", "p8"]
       eitherDecode (encodeServerMessage message)

@@ -2,7 +2,12 @@ const WS_URL = "ws://localhost:8080/ws";
 let socket = null;
 let requestNumber = 0;
 const VOTE_DURATION_MS = 60_000;
+const DAY_DURATION_MS = 180_000;
 let voteClockInterval = null;
+let dayClockInterval = null;
+const chatBubbleTimers = new Map();
+let reconnectTimer = null;
+const SESSION_STORAGE_KEY = "werewolf-session";
 
 function createTwinklingStars() {
   const layer = document.getElementById("twinkling-stars");
@@ -34,24 +39,38 @@ const state = {
   nightActionDone: false,
   nightMessage: "",
   seerResult: null,
+  wolfVotesSubmitted: 0,
+  wolfVotesTotal: 0,
+  wolfTargetLocked: false,
+  wolfLockedTargetId: null,
+  wolfTeammateIds: [],
   witchVictimId: null,
+  witchVictimResolved: false,
+  witchHealReady: true,
+  witchPoisonReady: true,
+  guardLastTargetId: null,
   revealedRoles: {},
   gameResult: null,
   hunterPending: false,
   hunterActionDone: false,
   hunterMessage: "",
   chatMessages: [],
+  chatBubbles: {},
   chatDay: null,
   chatChannel: "PublicDay",
   appearance: null
 };
 
-// T06: Chỉ lưu dữ liệu server cho phép xem; không chứa vai của người còn sống.
+// T06: Chỉ lưu dữ liệu server cho phép xem, không chứa vai của người còn sống.
 const voting = {
   phase: "Lobby", day: 0, players: [], hasVoted: false,
   canShoot: false, resolved: false, result: null, tally: [],
   summary: "", reveals: [], clockDay: null, deadlineMs: null
 };
+
+// Đồng hồ phía trình duyệt chỉ giúp người chơi theo dõi. Server vẫn là nguồn
+// quyết định duy nhất cho việc kết thúc Day và chuyển sang Voting.
+const discussionClock = {day: null, deadlineMs: null};
 
 const el = {
   status: document.querySelector("#connection-status"),
@@ -84,6 +103,7 @@ const el = {
   nightRoleDescription: document.querySelector("#night-role-description"),
   nightStatus: document.querySelector("#night-status"),
   wolfPanel: document.querySelector("#wolf-action-panel"),
+  wolfVoteStatus: document.querySelector("#wolf-vote-status"),
   wolfTarget: document.querySelector("#wolf-target"),
   wolfSubmit: document.querySelector("#wolf-submit"),
   seerPanel: document.querySelector("#seer-action-panel"),
@@ -103,6 +123,7 @@ const el = {
   witchPass: document.querySelector("#witch-pass"),
   hunterPanel: document.querySelector("#hunter-action-panel"),
   hunterPendingPanel: document.querySelector("#hunter-pending-panel"),
+  hunterChoicePanel: document.querySelector("#hunter-choice-panel"),
   hunterTarget: document.querySelector("#hunter-target"),
   hunterShoot: document.querySelector("#hunter-shoot"),
   hunterPass: document.querySelector("#hunter-pass"),
@@ -114,6 +135,10 @@ const el = {
   chatPublicTab: document.querySelector("#chat-public-tab"),
   chatWolvesTab: document.querySelector("#chat-wolves-tab"),
   chatHeading: document.querySelector("#chat-heading"),
+  dayClock: document.querySelector("#day-clock"),
+  dayClockLabel: document.querySelector("#day-clock-label"),
+  dayClockValue: document.querySelector("#day-clock-value"),
+  dayClockBar: document.querySelector("#day-clock-bar"),
   chatForm: document.querySelector("#chat-form"),
   chatInput: document.querySelector("#chat-input"),
   chatSubmit: document.querySelector("#chat-submit"),
@@ -131,6 +156,64 @@ const roleNames = {
   Witch: "Phù Thủy",
   Villager: "Dân Làng",
   Hunter: "Thợ Săn"
+};
+
+const serverErrorMessages = {
+  InvalidPlayerId: "Mã người chơi không hợp lệ.",
+  INVALID_PLAYER_NAME: "Tên người chơi không hợp lệ.",
+  InvalidPlayerName: "Tên người chơi không hợp lệ.",
+  DUPLICATE_PLAYER_ID: "Mã người chơi đã tồn tại trong phòng.",
+  DuplicatePlayerId: "Mã người chơi đã tồn tại trong phòng.",
+  DUPLICATE_PLAYER_NAME: "Tên này đã có người sử dụng trong phòng.",
+  DuplicatePlayerName: "Tên này đã có người sử dụng trong phòng.",
+  InvalidPlayerCount: "Số người chơi chưa phù hợp để bắt đầu.",
+  NotAllReady: "Vẫn còn người chơi chưa sẵn sàng.",
+  NOT_AUTHORIZED: "Bạn không có quyền thực hiện hành động này.",
+  NotAuthorized: "Bạn không có quyền thực hiện hành động này.",
+  WRONG_PHASE: "Không thể thực hiện hành động ở giai đoạn hiện tại.",
+  WrongPhase: "Không thể thực hiện hành động ở giai đoạn hiện tại.",
+  DeadPlayer: "Người chơi đã chết không thể thực hiện hành động này.",
+  PLAYER_NOT_FOUND: "Không tìm thấy người chơi trong phòng.",
+  PlayerNotFound: "Không tìm thấy người chơi trong phòng.",
+  InvalidTarget: "Mục tiêu không hợp lệ. Hãy chọn một người còn sống đúng luật.",
+  AlreadyVoted: "Bạn đã bỏ phiếu trong vòng này.",
+  GameAlreadyStarted: "Ván chơi đã bắt đầu.",
+  GameAlreadyOver: "Ván chơi đã kết thúc.",
+  ROOM_FULL: "Phòng đã đủ người.",
+  RoomFull: "Phòng đã đủ người.",
+  InvalidRole: "Vai trò của bạn không được phép thực hiện hành động này.",
+  InvalidNightAction: "Hành động ban đêm không hợp lệ.",
+  AbilityAlreadyUsed: "Khả năng này đã được sử dụng.",
+  HunterNotPending: "Thợ Săn chưa được Server cấp quyền bắn.",
+  DuplicateNightAction: "Bạn đã gửi hành động trong đêm này.",
+  EmptyChat: "Tin nhắn không được để trống.",
+  ChatTooLong: "Tin nhắn không được dài quá 300 ký tự.",
+  NotReady: "Bạn chưa ở trạng thái sẵn sàng.",
+  DuplicateRequest: "Yêu cầu này đã được xử lý trước đó.",
+  InvalidAppearance: "Ngoại hình đã chọn không hợp lệ.",
+  ROOM_NOT_FOUND: "Không tìm thấy phòng.",
+  NOT_JOINED: "Bạn chưa tham gia phòng.",
+  WRONG_ROOM: "Yêu cầu không thuộc phòng hiện tại.",
+  ALREADY_JOINED: "Bạn đã ở trong một phòng.",
+  INVALID_HUNTER_ACTION: "Lựa chọn của Thợ Săn không hợp lệ."
+};
+
+function localizedServerError(message) {
+  if (serverErrorMessages[message.code]) return serverErrorMessages[message.code];
+  if (typeof message.message === "string" && /[^\x00-\x7F]/u.test(message.message)) {
+    return message.message;
+  }
+  return message.code
+    ? `Yêu cầu bị từ chối (${message.code}).`
+    : "Yêu cầu bị từ chối.";
+}
+
+const phaseNames = {
+  Lobby: "Phòng chờ",
+  Night: "Ban đêm",
+  Day: "Ban ngày",
+  Voting: "Bỏ phiếu",
+  GameOver: "Kết thúc ván"
 };
 
 const roleDescriptions = {
@@ -188,6 +271,46 @@ function saveAppearance() {
   } catch { /* Trình duyệt có thể chặn lưu trữ ở file://; vẫn cho vào phòng. */ }
 }
 
+function targetSelectionContext() {
+  const alive = state.players.filter(player => player.alive !== false);
+  const otherAlive = alive.filter(player => player.playerId !== state.selfPlayerId);
+  if (state.phase === "Voting" && canChooseTarget() && state.connected && state.pending === null) {
+    return {select: voteEl["vote-target"], validIds: new Set(otherAlive.map(player => player.playerId))};
+  }
+  if (state.hunterPending && state.selfRole === "Hunter" && !state.hunterActionDone &&
+      state.connected && state.pending === null) {
+    return {select: el.hunterTarget, validIds: new Set(otherAlive.map(player => player.playerId))};
+  }
+  const canAct = state.phase === "Night" && state.connected && state.pending === null &&
+    !state.nightActionDone && getSelfPlayer()?.alive !== false;
+  if (!canAct) return null;
+  switch (state.selfRole) {
+    case "Werewolf":
+      return {select: el.wolfTarget, validIds: new Set(otherAlive
+        .filter(player => !state.wolfTeammateIds.includes(player.playerId))
+        .map(player => player.playerId))};
+    case "Seer":
+      return {select: el.seerTarget, validIds: new Set(otherAlive.map(player => player.playerId))};
+    case "Guard":
+      return {select: el.guardTarget, validIds: new Set(alive
+        .filter(player => player.playerId !== state.guardLastTargetId)
+        .map(player => player.playerId))};
+    case "Witch":
+      return state.witchVictimResolved && state.witchPoisonReady
+        ? {select: el.witchTarget, validIds: new Set(otherAlive.map(player => player.playerId))}
+        : null;
+    default:
+      return null;
+  }
+}
+
+function chooseTargetFromCard(playerId) {
+  const context = targetSelectionContext();
+  if (!context?.validIds.has(playerId)) return;
+  context.select.value = playerId;
+  render();
+}
+
 function renderDashboardPlayers() {
   el.playerList.replaceChildren();
   const outfits = ["#1E1B4B", "#1E3A8A", "#064E3B", "#701A75", "#881337", "#0F172A"];
@@ -214,17 +337,44 @@ function renderDashboardPlayers() {
     const name = document.createElement("div");
     name.className = "dashboard-card-name";
     name.textContent = `${slot + 1} · ${player.displayName || "Người chơi"}${isHost ? " 👑" : ""}${isMe ? " · Bạn" : ""}`;
-    const appearance = isMe && state.appearance
+    // Snapshot Server là nguồn dữ liệu chung để mọi trình duyệt thấy cùng avatar.
+    // Fallback theo slot chỉ dùng cho contract cũ chưa có appearance.
+    const appearance = player.appearance || (isMe && state.appearance
       ? state.appearance
       : {...defaultAppearance, hair: hairstyles[slot % hairstyles.length],
-        outfit: outfits[slot % outfits.length], accessory: accessories[slot % accessories.length]};
+        outfit: outfits[slot % outfits.length], accessory: accessories[slot % accessories.length]});
     const avatar = makeAvatar(appearance, player.playerId);
+    const bubbleText = state.chatBubbles[player.playerId];
+    if (bubbleText) {
+      const bubble = document.createElement("div");
+      bubble.className = "dashboard-chat-bubble";
+      bubble.textContent = bubbleText;
+      item.appendChild(bubble);
+    }
     const footer = document.createElement("div");
     footer.className = "dashboard-card-footer";
     footer.textContent = isDead ? "✕ Đã bị loại"
       : state.phase === "Lobby" ? (player.ready ? "✓ Sẵn sàng" : "Chưa sẵn sàng")
       : "Đang chơi";
     item.append(name, avatar, footer);
+
+    const targetContext = targetSelectionContext();
+    const targetable = targetContext?.validIds.has(player.playerId) === true;
+    const selected = targetContext?.select.value === player.playerId;
+    item.classList.toggle("is-targetable", targetable);
+    item.classList.toggle("is-selected-target", selected);
+    if (targetable) {
+      item.tabIndex = 0;
+      item.setAttribute("role", "button");
+      item.setAttribute("aria-label", `Chọn ${player.displayName || player.playerId} làm mục tiêu`);
+      item.addEventListener("click", () => chooseTargetFromCard(player.playerId));
+      item.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          chooseTargetFromCard(player.playerId);
+        }
+      });
+    }
 
     if (isMe && state.phase !== "Lobby" && state.selfRole) {
       const role = document.createElement("div");
@@ -234,11 +384,12 @@ function renderDashboardPlayers() {
       help.type = "button";
       help.className = "dashboard-ability-button";
       help.textContent = "Khả năng của tôi";
-      help.addEventListener("click", () => {
+      help.addEventListener("click", event => {
+        if (event?.stopPropagation) event.stopPropagation();
         document.getElementById("role-help-title").textContent = role.textContent;
         const ability = state.selfAbility;
         document.getElementById("role-help-text").textContent = ability
-          ? [ability.description, ability.phase && `Giai đoạn: ${ability.phase}`,
+          ? [ability.description, ability.phase && `Giai đoạn: ${phaseNames[ability.phase] || ability.phase}`,
             ability.targetRules && `Mục tiêu: ${ability.targetRules}`].filter(Boolean).join("\n")
           : roleHelp[state.selfRole] || "Chưa có hướng dẫn.";
         el.roleDialog.showModal();
@@ -274,8 +425,11 @@ function renderVoteClock() {
   voteEl["vote-clock"].classList.toggle("is-urgent", seconds <= 10);
 }
 
-function startVoteClock(day) {
-  if (voting.clockDay !== day || voting.deadlineMs === null) {
+function startVoteClock(day, remainingMs = null) {
+  if (Number.isFinite(remainingMs)) {
+    voting.clockDay = day;
+    voting.deadlineMs = Date.now() + Math.max(0, remainingMs);
+  } else if (voting.clockDay !== day || voting.deadlineMs === null) {
     voting.clockDay = day;
     voting.deadlineMs = Date.now() + VOTE_DURATION_MS;
   }
@@ -290,6 +444,48 @@ function startVoteClock(day) {
     }, 250);
   }
   renderVoteClock();
+}
+
+function clearDayClock() {
+  if (dayClockInterval !== null) clearInterval(dayClockInterval);
+  dayClockInterval = null;
+  discussionClock.day = null;
+  discussionClock.deadlineMs = null;
+}
+
+function renderDayClock() {
+  const visible = state.phase === "Day" && discussionClock.deadlineMs !== null;
+  el.dayClock.hidden = !visible;
+  if (!visible) return;
+  const remaining = Math.max(0, discussionClock.deadlineMs - Date.now());
+  const seconds = Math.ceil(remaining / 1000);
+  el.dayClockValue.textContent = `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  el.dayClockBar.style.setProperty("width", `${remaining / DAY_DURATION_MS * 100}%`);
+  el.dayClock.classList.toggle("is-urgent", seconds <= 15);
+  el.dayClockLabel.textContent = seconds === 0
+    ? "Đã hết giờ · chờ Server chuyển sang bỏ phiếu"
+    : "Thời gian thảo luận";
+}
+
+function startDayClock(day, remainingMs = null) {
+  if (Number.isFinite(remainingMs)) {
+    discussionClock.day = day;
+    discussionClock.deadlineMs = Date.now() + Math.max(0, remainingMs);
+  } else if (discussionClock.day !== day || discussionClock.deadlineMs === null) {
+    discussionClock.day = day;
+    discussionClock.deadlineMs = Date.now() + DAY_DURATION_MS;
+  }
+  if (dayClockInterval === null) {
+    dayClockInterval = setInterval(() => {
+      renderDayClock();
+      if (Date.now() >= discussionClock.deadlineMs) {
+        clearInterval(dayClockInterval);
+        dayClockInterval = null;
+        renderDayClock();
+      }
+    }, 250);
+  }
+  renderDayClock();
 }
 
 function playerLabel(pid) {
@@ -389,19 +585,34 @@ function resetNightState() {
   state.nightActionDone = false;
   state.nightMessage = "";
   state.seerResult = null;
+  state.wolfVotesSubmitted = 0;
+  state.wolfVotesTotal = 0;
+  state.wolfTargetLocked = false;
+  state.wolfLockedTargetId = null;
+  state.wolfTeammateIds = [];
   state.witchVictimId = null;
+  state.witchVictimResolved = false;
+  state.witchHealReady = true;
+  state.witchPoisonReady = true;
+  state.guardLastTargetId = null;
   state.revealedRoles = {};
   state.gameResult = null;
   state.hunterPending = false;
   state.hunterActionDone = false;
   state.hunterMessage = "";
   state.chatMessages = [];
+  state.chatBubbles = {};
+  for (const timer of chatBubbleTimers.values()) {
+    if (typeof clearTimeout === "function") clearTimeout(timer);
+  }
+  chatBubbleTimers.clear();
   state.chatDay = null;
   state.chatChannel = "PublicDay";
 }
 
 function resetRoomState() {
   clearVoteClock();
+  clearDayClock();
   state.roomId = null;
   state.selfPlayerId = null;
   state.hostPlayerId = null;
@@ -521,9 +732,11 @@ function renderNightTargets() {
   // PlayerView chua co alive va team.
   // UI chi loc muc tieu theo thong tin duoc phep biet.
   // Server van phai validate moi NightAction.
-  setTargetOptions(el.wolfTarget, otherPlayers);
+  setTargetOptions(el.wolfTarget, otherPlayers.filter(player =>
+    !state.wolfTeammateIds.includes(player.playerId)));
   setTargetOptions(el.seerTarget, otherPlayers);
-  setTargetOptions(el.guardTarget, alivePlayers);
+  setTargetOptions(el.guardTarget, alivePlayers.filter(player =>
+    player.playerId !== state.guardLastTargetId));
   setTargetOptions(el.witchTarget, otherPlayers);
 
   // PlayerView chua co lifeStatus; Server phai validate Hunter target.
@@ -562,6 +775,7 @@ function renderNight() {
     state.pending === null &&
     role !== null &&
     !state.nightActionDone && getSelfPlayer()?.alive !== false && !state.hunterPending;
+  const witchCanChoose = canAct && state.witchVictimResolved;
 
   el.wolfPanel.hidden = role !== "Werewolf";
   el.seerPanel.hidden = role !== "Seer";
@@ -580,10 +794,23 @@ function renderNight() {
   el.wolfTarget.disabled = !canAct;
   el.seerTarget.disabled = !canAct;
   el.guardTarget.disabled = !canAct;
-  el.witchTarget.disabled = !canAct;
+  el.witchTarget.disabled = !witchCanChoose;
 
   el.wolfSubmit.disabled =
     !canAct || !el.wolfTarget.value;
+
+  if (state.wolfTargetLocked) {
+    el.wolfVoteStatus.textContent = state.wolfLockedTargetId === null
+      ? "Phiếu Sói đã khóa: hòa hoặc không có phiếu, đêm nay không có nạn nhân."
+      : `Phiếu Sói đã khóa mục tiêu: ${getPlayerName(state.wolfLockedTargetId)}.`;
+  } else if (state.wolfVotesTotal > 0) {
+    el.wolfVoteStatus.textContent =
+      `Đã chốt ${state.wolfVotesSubmitted}/${state.wolfVotesTotal} Sói. ` +
+      "Mỗi Sói còn sống cần gửi một lựa chọn.";
+  } else {
+    el.wolfVoteStatus.textContent =
+      "Hãy cùng các Sói còn sống chốt một mục tiêu.";
+  }
 
   el.seerSubmit.disabled =
     !canAct || !el.seerTarget.value;
@@ -592,12 +819,12 @@ function renderNight() {
     !canAct || !el.guardTarget.value;
 
   el.witchHeal.disabled =
-    !canAct || state.witchVictimId === null;
+    !witchCanChoose || !state.witchHealReady || state.witchVictimId === null;
 
   el.witchPoison.disabled =
-    !canAct || !el.witchTarget.value;
+    !witchCanChoose || !state.witchPoisonReady || !el.witchTarget.value;
 
-  el.witchPass.disabled = !canAct;
+  el.witchPass.disabled = !witchCanChoose;
 
   if (state.nightMessage) {
     el.nightStatus.textContent = state.nightMessage;
@@ -607,6 +834,9 @@ function renderNight() {
   } else if (!role) {
     el.nightStatus.textContent =
       "Đang chờ thông tin vai trò từ Server.";
+  } else if (role === "Witch" && !state.witchVictimResolved) {
+    el.nightStatus.textContent =
+      "Đang chờ tất cả Sói chốt mục tiêu trước khi Phù Thủy hành động.";
   } else {
     el.nightStatus.textContent =
       "Hãy chọn hành động phù hợp với vai trò.";
@@ -622,10 +852,15 @@ function renderNight() {
       `Kết quả soi: phe ${teamName}.`;
   }
 
-  el.witchVictimPanel.hidden =
-    state.witchVictimId === null;
+  el.witchVictimPanel.hidden = role !== "Witch";
 
-  if (state.witchVictimId !== null) {
+  if (role === "Witch" && !state.witchVictimResolved) {
+    el.witchVictimText.textContent =
+      "Đang chờ tất cả Sói còn sống chốt mục tiêu. Bạn chưa cần chọn hành động.";
+  } else if (role === "Witch" && state.witchVictimId === null) {
+    el.witchVictimText.textContent =
+      "Phiếu Sói hòa hoặc không có phiếu, nên đêm này không có nạn nhân để cứu. Bạn có thể dùng thuốc độc hoặc bỏ lượt.";
+  } else if (state.witchVictimId !== null) {
     el.witchVictimText.textContent =
       `Nạn nhân được Sói chọn: ${
         getPlayerName(state.witchVictimId)
@@ -643,13 +878,14 @@ function renderHunter() {
   setTargetOptions(el.hunterTarget, state.players.filter(p =>
     p.playerId !== state.selfPlayerId && p.alive !== false && !state.revealedRoles[p.playerId]));
   el.hunterPendingPanel.hidden = !state.hunterPending;
+  el.hunterChoicePanel.hidden = !state.hunterPending;
   el.hunterTarget.disabled = !allowed;
   el.hunterShoot.disabled = !allowed || !el.hunterTarget.value;
   el.hunterPass.disabled = !allowed;
   el.hunterStatus.textContent = !state.connected ? "Mất kết nối. Không thể gửi lựa chọn."
     : state.hunterMessage || (state.hunterPending
       ? "Bạn có thể bắn hoặc bỏ lượt; hết hạn sẽ tự bỏ qua."
-      : "Đang chờ thông báo từ Server.");
+      : "Bạn đang còn sống; quyền bắn chỉ mở sau khi bạn bị loại và Server xác nhận.");
 }
 
 function render() {
@@ -697,8 +933,15 @@ function renderDay() {
   }
   el.chatDaySelect.value = String(currentDay);
   el.chatHeading.textContent = `${state.chatChannel === "WolvesNight" ? "Chat Sói · Đêm" : "Chat chung · Ngày"} ${currentDay}`;
+  renderDayClock();
 
   el.chatMessages.replaceChildren();
+  const marker = document.createElement("div");
+  marker.className = "chat-day-marker";
+  marker.textContent = state.chatChannel === "WolvesNight"
+    ? `Đêm ${currentDay}`
+    : `Ngày ${currentDay} bắt đầu`;
+  el.chatMessages.appendChild(marker);
   const visible = state.chatMessages.filter(chat => chat.day === currentDay &&
     chat.channel === state.chatChannel).sort((a, b) => a.sequence - b.sequence);
   for (const chat of visible) {
@@ -708,17 +951,25 @@ function renderDay() {
     line.append(author, document.createTextNode(chat.message));
     el.chatMessages.appendChild(line);
   }
-  if (visible.length === 0) el.chatMessages.textContent = "Chưa có tin nhắn cho mục này.";
+  if (visible.length === 0) {
+    const empty = document.createElement("p");
+    empty.className = "chat-empty";
+    empty.textContent = "Chưa có tin nhắn cho mục này.";
+    el.chatMessages.appendChild(empty);
+  }
 
   const isCurrentDay = currentDay === voting.day;
-  // Lệnh Chat hiện tại của Server chỉ nhận chat chung ban ngày.
+  const canChatPublic = state.chatChannel === "PublicDay" && state.phase === "Day";
+  const canChatWolves = state.chatChannel === "WolvesNight" &&
+    state.phase === "Night" && isWolf;
   const canChat = getSelfPlayer()?.alive === true && isCurrentDay &&
-    state.chatChannel === "PublicDay" && state.phase === "Day";
+    (canChatPublic || canChatWolves);
   const busy = state.pending !== null;
   el.chatInput.disabled = !state.connected || busy || !canChat;
   el.chatSubmit.disabled = !state.connected || busy || !canChat || !el.chatInput.value.trim();
   el.chatStatus.textContent = state.chatChannel === "WolvesNight"
-    ? "Chat Sói đang chờ Server hỗ trợ gửi và cấp lịch sử riêng."
+    ? canChat ? "Chỉ các Sói còn sống trong phòng nhận được tin nhắn này."
+      : "Chat Sói chỉ mở cho Sói còn sống vào ban đêm."
     : canChat ? "Bạn có thể thảo luận ban ngày."
     : "Đang xem lịch sử; chỉ người còn sống mới gửi được ở ban ngày hiện tại.";
 }
@@ -779,6 +1030,27 @@ function sendCommand(type, fields = {}) {
   }
 }
 
+function readSavedSession() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(SESSION_STORAGE_KEY) || "null");
+    return saved && typeof saved.roomId === "string" &&
+      typeof saved.sessionToken === "string" ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveSession(roomId, playerId, sessionToken) {
+  try {
+    localStorage.setItem(SESSION_STORAGE_KEY,
+      JSON.stringify({roomId, playerId, sessionToken}));
+  } catch { /* Trình duyệt chặn localStorage: ván vẫn chơi được nhưng không tự nối lại. */ }
+}
+
+function clearSavedSession() {
+  try { localStorage.removeItem(SESSION_STORAGE_KEY); } catch { /* Không có quyền lưu trữ. */ }
+}
+
 function sendNightAction(choice) {
   if (
     state.phase !== "Night" ||
@@ -787,6 +1059,12 @@ function sendNightAction(choice) {
     state.nightActionDone || getSelfPlayer()?.alive === false || state.hunterPending
   ) {
     state.error = "Bạn chưa được phép hành động trong đêm.";
+    render();
+    return;
+  }
+
+  if (state.selfRole === "Witch" && !state.witchVictimResolved) {
+    state.error = "Phù Thủy phải chờ Server khóa phiếu Sói trước khi hành động.";
     render();
     return;
   }
@@ -823,6 +1101,7 @@ function handlePhaseChanged(phase) {
   const previousPhase = state.phase;
 
   if (previousPhase === "Voting" && phase !== "Voting") clearVoteClock();
+  if (previousPhase === "Day" && phase !== "Day") clearDayClock();
 
   // Đồng bộ một phase cho cả T05 và T06; xóa kết quả cũ khi bắt đầu Voting mới.
   if (phase === "Voting" && voting.phase !== "Voting") {
@@ -844,7 +1123,12 @@ function handlePhaseChanged(phase) {
     state.nightActionDone = false;
     state.nightMessage = "";
     state.seerResult = null;
+    state.wolfVotesSubmitted = 0;
+    state.wolfVotesTotal = 0;
+    state.wolfTargetLocked = false;
+    state.wolfLockedTargetId = null;
     state.witchVictimId = null;
+    state.witchVictimResolved = false;
     state.hunterPending = false;
     state.hunterActionDone = false;
     state.hunterMessage = "";
@@ -854,14 +1138,19 @@ function handlePhaseChanged(phase) {
     state.nightActionDone = false;
     state.nightMessage = "";
     state.seerResult = null;
+    state.wolfVotesSubmitted = 0;
+    state.wolfVotesTotal = 0;
+    state.wolfTargetLocked = false;
+    state.wolfLockedTargetId = null;
     state.witchVictimId = null;
+    state.witchVictimResolved = false;
     state.hunterPending = false;
     state.hunterActionDone = false;
     state.hunterMessage = "";
   }
 }
 
-function receiveChat(chat) {
+function receiveChat(chat, showBubble = true) {
   const day = Number(chat.day ?? voting.day);
   const channel = chat.channel || "PublicDay";
   const playerId = chat.senderId ?? chat.playerId;
@@ -877,6 +1166,20 @@ function receiveChat(chat) {
     sequence: Number.isInteger(chat.sequence) ? chat.sequence : state.chatMessages.length,
     playerId, message
   });
+
+  if (showBubble && state.players.some(player => player.playerId === playerId)) {
+    state.chatBubbles[playerId] = message;
+    if (typeof clearTimeout === "function" && chatBubbleTimers.has(playerId)) {
+      clearTimeout(chatBubbleTimers.get(playerId));
+    }
+    if (typeof setTimeout === "function") {
+      chatBubbleTimers.set(playerId, setTimeout(() => {
+        delete state.chatBubbles[playerId];
+        chatBubbleTimers.delete(playerId);
+        render();
+      }, 5000));
+    }
+  }
 }
 
 function handleServerMessage(message) {
@@ -896,11 +1199,40 @@ function handleServerMessage(message) {
         resolved: message.resolved, result: message.result
       });
       if (message.phase === "Voting" && !message.resolved) startVoteClock(message.day);
+      if (message.phase === "Day") startDayClock(message.day);
       state.hunterPending = message.canShoot;
       if (message.canShoot) state.hunterActionDone = false;
       state.players = message.players.map(player => ({
         ...state.players.find(p => p.playerId === player.playerId), ...player
       }));
+      break;
+
+    case "PhaseTimeRemaining":
+      if (message.phase !== state.phase || message.day !== voting.day ||
+          !Number.isFinite(message.remainingMs)) break;
+      if (message.phase === "Day") startDayClock(message.day, message.remainingMs);
+      if (message.phase === "Voting" && !voting.resolved) {
+        startVoteClock(message.day, message.remainingMs);
+      }
+      break;
+
+    case "PrivateActionState":
+      if (message.roomId === state.roomId) {
+        if (state.phase === "Night") {
+          state.nightActionDone = message.nightActionSubmitted === true;
+          if (state.nightActionDone) {
+            state.nightMessage = "Hành động đã được Server xác nhận.";
+          }
+        }
+        if (typeof message.witchHealReady === "boolean") {
+          state.witchHealReady = message.witchHealReady;
+        }
+        if (typeof message.witchPoisonReady === "boolean") {
+          state.witchPoisonReady = message.witchPoisonReady;
+        }
+        state.guardLastTargetId = typeof message.lastProtectedId === "string"
+          ? message.lastProtectedId : null;
+      }
       break;
 
     case "ActionAccepted":
@@ -931,6 +1263,15 @@ function handleServerMessage(message) {
       state.pending = null;
       break;
 
+    case "SessionEstablished":
+      if (message.roomId && message.playerId && message.sessionToken) {
+        saveSession(message.roomId, message.playerId, message.sessionToken);
+        state.roomId = message.roomId;
+        state.selfPlayerId = message.playerId;
+        if (state.pending?.type === "Reconnect") state.pending = null;
+      }
+      break;
+
     case "PlayerJoined":
       if (
         message.player &&
@@ -952,6 +1293,7 @@ function handleServerMessage(message) {
       }
 
       if (message.playerId === state.selfPlayerId) {
+        clearSavedSession();
         resetRoomState();
       }
       break;
@@ -981,10 +1323,19 @@ function handleServerMessage(message) {
     case "YourRole":
       if (message.roomId === state.roomId) {
         state.selfRole = message.role;
+        if (message.role !== "Werewolf") state.wolfTeammateIds = [];
         state.selfAbility = message.ability && typeof message.ability.description === "string"
           ? message.ability : null;
         state.nightMessage =
           "Bạn đã nhận vai trò từ Server.";
+      }
+      break;
+
+    case "WolfTeam":
+      if (message.roomId === state.roomId && state.selfRole === "Werewolf") {
+        state.wolfTeammateIds = Array.isArray(message.playerIds)
+          ? message.playerIds.filter(playerId => typeof playerId === "string")
+          : [];
       }
       break;
 
@@ -1001,11 +1352,33 @@ function handleServerMessage(message) {
       }
       break;
 
+    case "WolfVoteUpdated":
+      if (message.roomId === state.roomId) {
+        state.wolfVotesSubmitted = Number.isInteger(message.submitted)
+          ? message.submitted : 0;
+        state.wolfVotesTotal = Number.isInteger(message.total)
+          ? message.total : 0;
+        state.nightMessage =
+          `Sói đã chốt ${state.wolfVotesSubmitted}/${state.wolfVotesTotal} lựa chọn.`;
+      }
+      break;
+
+    case "WolfTargetLocked":
+      if (message.roomId === state.roomId) {
+        state.wolfTargetLocked = true;
+        state.wolfLockedTargetId = message.targetId ?? null;
+        state.nightMessage = state.wolfLockedTargetId === null
+          ? "Phiếu Sói đã khóa nhưng không có nạn nhân duy nhất."
+          : `Mục tiêu của đàn Sói đã khóa: ${getPlayerName(state.wolfLockedTargetId)}.`;
+      }
+      break;
+
     case "WitchVictimNotice":
       if (message.roomId === state.roomId) {
+        state.witchVictimResolved = true;
         state.witchVictimId = message.victimId;
         state.nightMessage = message.victimId === null
-          ? "Sói không có nạn nhân để cứu."
+          ? "Phiếu Sói đã khóa nhưng không có nạn nhân duy nhất để cứu."
           : "Phù Thủy đã nhận thông báo nạn nhân.";
       }
       break;
@@ -1098,38 +1471,35 @@ function handleServerMessage(message) {
     case "ChatHistorySnapshot":
       // Chỉ hiện dữ liệu lịch sử Server cấp cho chính kết nối này; không tự suy vai hay kênh.
       if (message.roomId === state.roomId && Array.isArray(message.messages)) {
-        for (const chat of message.messages) receiveChat(chat);
+        for (const chat of message.messages) receiveChat(chat, false);
       }
       break;
 
     case "CommandRejected":
+      if (message.code === "INVALID_SESSION") {
+        clearSavedSession();
+        resetRoomState();
+        state.error = "Phiên cũ không còn hợp lệ. Hãy tham gia lại phòng.";
+        break;
+      }
       if (
         message.requestId === null ||
         message.requestId === state.pending?.requestId
       ) {
+        const localizedError = localizedServerError(message);
         if (state.pending?.type === "NightAction") {
-          state.nightMessage =
-            "Hành động không được chấp nhận.";
+          state.nightMessage = localizedError;
         }
 
         if (state.pending?.type === "HunterAction") {
-          state.hunterMessage =
-            "Server chưa xử lý hành động Hunter: " +
-            (
-              message.message ||
-              message.code ||
-              "Lệnh bị từ chối."
-            );
+          state.hunterMessage = localizedError;
 
           // Giu Hunter pending va mo lai nut khi Server tu choi.
           state.hunterActionDone = false;
         }
 
         state.pending = null;
-        state.error =
-          message.message ||
-          message.code ||
-          "Yêu cầu bị từ chối.";
+        state.error = localizedError;
       }
       break;
 
@@ -1341,55 +1711,73 @@ el.chatWolvesTab.addEventListener("click", () => {
 el.chatForm.addEventListener("submit", event => {
   event.preventDefault();
   const message = el.chatInput.value.trim();
-  if (state.phase === "Day" && state.chatChannel === "PublicDay" &&
-      (state.chatDay ?? voting.day) === voting.day && getSelfPlayer()?.alive === true && message) {
-    sendCommand("Chat", { message });
+  const correctPhase =
+    state.chatChannel === "PublicDay" && state.phase === "Day" ||
+    state.chatChannel === "WolvesNight" && state.phase === "Night" && state.selfRole === "Werewolf";
+  if (correctPhase && (state.chatDay ?? voting.day) === voting.day &&
+      getSelfPlayer()?.alive === true && message) {
+    sendCommand("Chat", { channel: state.chatChannel, message });
   }
 });
 
-socket = new WebSocket(WS_URL);
+function connectSocket() {
+  socket = new WebSocket(WS_URL);
 
-socket.addEventListener("open", () => {
-  state.connected = true;
-  state.error = "";
-  render();
-});
-
-socket.addEventListener("message", event => {
-  let message;
-
-  try {
-    message = JSON.parse(event.data);
-  } catch {
-    state.error =
-      "Server gửi dữ liệu JSON không hợp lệ.";
+  socket.addEventListener("open", () => {
+    state.connected = true;
+    state.error = "";
+    const saved = readSavedSession();
+    if (saved) {
+      const requestId = `reconnect-${Date.now()}-${++requestNumber}`;
+      state.pending = {type: "Reconnect", requestId};
+      socket.send(JSON.stringify({
+        type: "Reconnect", requestId,
+        roomId: saved.roomId, sessionToken: saved.sessionToken
+      }));
+    }
     render();
-    return;
-  }
+  });
 
-  try {
-    handleServerMessage(message);
-  } catch (error) {
-    console.error(
-      "Loi xu ly Server message:",
-      error
-    );
-    state.error =
-      "Không xử lý được phản hồi từ Server.";
+  socket.addEventListener("message", event => {
+    let message;
+    try {
+      message = JSON.parse(event.data);
+    } catch {
+      state.error = "Server gửi dữ liệu JSON không hợp lệ.";
+      render();
+      return;
+    }
+
+    try {
+      handleServerMessage(message);
+    } catch (error) {
+      console.error("Loi xu ly Server message:", error);
+      state.error = "Không xử lý được phản hồi từ Server.";
+      render();
+    }
+  });
+
+  socket.addEventListener("close", () => {
+    state.connected = false;
+    state.pending = null;
+    state.error = readSavedSession()
+      ? "Mất kết nối Server. Đang thử nối lại..."
+      : "Đã mất kết nối Server.";
     render();
-  }
-});
+    if (typeof setTimeout === "function" && reconnectTimer === null) {
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connectSocket();
+      }, 1500);
+    }
+  });
 
-socket.addEventListener("close", () => {
-  state.connected = false;
-  state.pending = null;
-  resetRoomState();
-  render();
-});
+  socket.addEventListener("error", () => {
+    state.error = "Không kết nối được Server.";
+    render();
+  });
+}
 
-socket.addEventListener("error", () => {
-  state.error = "Không kết nối được Server.";
-  render();
-});
+connectSocket();
 
 render();

@@ -6,6 +6,8 @@ module Protocol.Types where
 
 import Domain.Types
   ( Appearance(..)
+  , ChatChannel(..)
+  , ChatRecord(..)
   , NightChoice(..)
   , Role(..)
   , Team(..)
@@ -53,6 +55,8 @@ data ClientMessage
   | ClientVote RequestId RoomId String
   | ClientHunterAction RequestId RoomId NightChoice
   | ClientChat RequestId RoomId String
+  | ClientChannelChat RequestId RoomId ChatChannel String
+  | ClientReconnect RequestId RoomId String
   deriving (Eq, Show)
 
 -- Thong tin Player cong khai.
@@ -99,6 +103,9 @@ data ServerMessage
   -- T05: Night Server Events.
   | MsgNightActionAccepted RoomId
   | MsgSeerResult RoomId Team
+  | MsgWolfTeam RoomId [String]
+  | MsgWolfVoteUpdated RoomId Int Int
+  | MsgWolfTargetLocked RoomId (Maybe String)
   | MsgWitchVictimNotice RoomId (Maybe String)
   | MsgHunterShotPending RoomId
   | MsgHunterShotResolved RoomId String (Maybe String)
@@ -127,7 +134,15 @@ data ServerMessage
 
   -- hasVoted/canShoot duoc tinh rieng cho nguoi nhan.
   | MsgVotingSnapshot RoomId Phase Int [VotingPlayerView] Bool Bool Bool (Maybe GameResult)
+  -- Thời gian còn lại do Server cấp; client không tự gia hạn khi reconnect.
+  | MsgPhaseTimeRemaining RoomId Phase Int Integer
+  -- Snapshot rieng cho chinh actor; khong dua vao Lobby/Voting snapshot cong khai.
+  | MsgPrivateActionState RoomId Bool (Maybe Bool) (Maybe Bool) (Maybe String)
   | MsgChatMessage RoomId String String
+  | MsgChannelChatMessage RoomId Int ChatChannel String String
+  | MsgStoredChatMessage RoomId ChatRecord
+  | MsgChatHistorySnapshot RoomId [ChatRecord]
+  | MsgSessionEstablished RoomId String String
   deriving (Eq, Show)
 
 -- Doc NightChoice ma khong tao orphan FromJSON instance.
@@ -320,7 +335,17 @@ instance FromJSON ClientMessage where
         pure (ClientHunterAction requestId roomId choice)
 
       "Chat" ->
-        ClientChat requestId roomId <$> obj .: "message"
+        do
+          maybeChannel <- obj .:? "channel" :: Parser (Maybe String)
+          messageText <- obj .: "message"
+          case maybeChannel of
+            Nothing -> pure (ClientChat requestId roomId messageText)
+            Just "PublicDay" -> pure (ClientChannelChat requestId roomId PublicDay messageText)
+            Just "WolvesNight" -> pure (ClientChannelChat requestId roomId WolvesNight messageText)
+            Just _ -> fail "Kenh chat khong hop le."
+
+      "Reconnect" ->
+        ClientReconnect requestId roomId <$> obj .: "sessionToken"
 
       _ ->
         fail ("Loai command khong ho tro: " ++ messageType)
@@ -421,6 +446,23 @@ instance ToJSON ClientMessage where
           , "message" .= messageText
           ]
 
+      ClientChannelChat requestId roomId channel messageText ->
+        object
+          [ "type" .= ("Chat" :: String)
+          , "requestId" .= requestId
+          , "roomId" .= roomId
+          , "channel" .= show channel
+          , "message" .= messageText
+          ]
+
+      ClientReconnect requestId roomId sessionToken ->
+        object
+          [ "type" .= ("Reconnect" :: String)
+          , "requestId" .= requestId
+          , "roomId" .= roomId
+          , "sessionToken" .= sessionToken
+          ]
+
 -- PlayerView: FromJSON va ToJSON.
 instance FromJSON PlayerView where
   parseJSON = withObject "PlayerView" $ \obj -> do
@@ -496,6 +538,22 @@ instance FromJSON ServerMessage where
         teamText <- obj .: "team"
         team <- parseTeam teamText
         pure (MsgSeerResult roomId team)
+
+      "WolfTeam" ->
+        MsgWolfTeam
+          <$> obj .: "roomId"
+          <*> obj .: "playerIds"
+
+      "WolfVoteUpdated" ->
+        MsgWolfVoteUpdated
+          <$> obj .: "roomId"
+          <*> obj .: "submitted"
+          <*> obj .: "total"
+
+      "WolfTargetLocked" ->
+        MsgWolfTargetLocked
+          <$> obj .: "roomId"
+          <*> obj .: "targetId"
 
       "WitchVictimNotice" ->
         MsgWitchVictimNotice
@@ -585,16 +643,74 @@ instance FromJSON ServerMessage where
           <*> obj .: "resolved"
           <*> pure result
 
+      "PhaseTimeRemaining" -> do
+        phase <- obj .: "phase" >>= parsePhase
+        MsgPhaseTimeRemaining
+          <$> obj .: "roomId"
+          <*> pure phase
+          <*> obj .: "day"
+          <*> obj .: "remainingMs"
+
+      "PrivateActionState" ->
+        MsgPrivateActionState
+          <$> obj .: "roomId"
+          <*> obj .: "nightActionSubmitted"
+          <*> obj .:? "witchHealReady"
+          <*> obj .:? "witchPoisonReady"
+          <*> obj .:? "lastProtectedId"
+
       "PlayerEliminated" ->
         MsgPlayerEliminated
           <$> obj .: "roomId"
           <*> obj .: "playerId"
 
       "ChatMessage" ->
-        MsgChatMessage
+        do
+          roomId <- obj .: "roomId"
+          playerId <- obj .: "playerId"
+          messageText <- obj .: "message"
+          maybeChannel <- obj .:? "channel" :: Parser (Maybe String)
+          case maybeChannel of
+            Nothing -> pure (MsgChatMessage roomId playerId messageText)
+            Just channelText -> do
+              day <- obj .: "day"
+              channel <- case channelText of
+                "PublicDay" -> pure PublicDay
+                "WolvesNight" -> pure WolvesNight
+                _ -> fail "Kenh chat khong hop le."
+              maybeMessageId <- obj .:? "messageId"
+              maybeSequence <- obj .:? "sequence"
+              case (maybeMessageId, maybeSequence) of
+                (Just messageId, Just sequenceNumber) ->
+                  pure (MsgStoredChatMessage roomId
+                    (ChatRecord roomId day channel messageId sequenceNumber playerId messageText))
+                _ ->
+                  pure (MsgChannelChatMessage roomId day channel playerId messageText)
+
+      "ChatHistorySnapshot" -> do
+        roomId <- obj .: "roomId"
+        entries <- obj .: "messages"
+        records <- mapM
+          (withObject "ChatRecord" $ \entry -> do
+            day <- entry .: "day"
+            channelText <- entry .: "channel" :: Parser String
+            channel <- case channelText of
+              "PublicDay" -> pure PublicDay
+              "WolvesNight" -> pure WolvesNight
+              _ -> fail "Kenh chat khong hop le."
+            ChatRecord roomId day channel
+              <$> entry .: "messageId"
+              <*> entry .: "sequence"
+              <*> entry .: "senderId"
+              <*> entry .: "text")
+          entries
+        pure (MsgChatHistorySnapshot roomId records)
+
+      "SessionEstablished" ->
+        MsgSessionEstablished
           <$> obj .: "roomId"
           <*> obj .: "playerId"
-          <*> obj .: "message"
+          <*> obj .: "sessionToken"
 
       _ ->
         fail ("Loai server message khong ho tro: " ++ messageType)
@@ -673,6 +789,28 @@ instance ToJSON ServerMessage where
           [ "type" .= ("SeerResult" :: String)
           , "roomId" .= roomId
           , "team" .= show team
+          ]
+
+      MsgWolfTeam roomId playerIds ->
+        object
+          [ "type" .= ("WolfTeam" :: String)
+          , "roomId" .= roomId
+          , "playerIds" .= playerIds
+          ]
+
+      MsgWolfVoteUpdated roomId submitted total ->
+        object
+          [ "type" .= ("WolfVoteUpdated" :: String)
+          , "roomId" .= roomId
+          , "submitted" .= submitted
+          , "total" .= total
+          ]
+
+      MsgWolfTargetLocked roomId target ->
+        object
+          [ "type" .= ("WolfTargetLocked" :: String)
+          , "roomId" .= roomId
+          , "targetId" .= target
           ]
 
       MsgWitchVictimNotice roomId victim ->
@@ -784,6 +922,25 @@ instance ToJSON ServerMessage where
           , "result" .= fmap gameResultText result
           ]
 
+      MsgPhaseTimeRemaining roomId phase day remainingMs ->
+        object
+          [ "type" .= ("PhaseTimeRemaining" :: String)
+          , "roomId" .= roomId
+          , "phase" .= show phase
+          , "day" .= day
+          , "remainingMs" .= remainingMs
+          ]
+
+      MsgPrivateActionState roomId submitted healReady poisonReady lastProtected ->
+        object
+          [ "type" .= ("PrivateActionState" :: String)
+          , "roomId" .= roomId
+          , "nightActionSubmitted" .= submitted
+          , "witchHealReady" .= healReady
+          , "witchPoisonReady" .= poisonReady
+          , "lastProtectedId" .= lastProtected
+          ]
+
       MsgPlayerEliminated roomId playerId ->
         object
           [ "type" .= ("PlayerEliminated" :: String)
@@ -797,4 +954,51 @@ instance ToJSON ServerMessage where
           , "roomId" .= roomId
           , "playerId" .= playerId
           , "message" .= messageText
+          ]
+
+      MsgChannelChatMessage roomId day channel playerId messageText ->
+        object
+          [ "type" .= ("ChatMessage" :: String)
+          , "roomId" .= roomId
+          , "day" .= day
+          , "channel" .= show channel
+          , "playerId" .= playerId
+          , "message" .= messageText
+          ]
+
+      MsgStoredChatMessage roomId record ->
+        object
+          [ "type" .= ("ChatMessage" :: String)
+          , "roomId" .= roomId
+          , "day" .= chatDay record
+          , "channel" .= show (chatChannel record)
+          , "messageId" .= chatMessageId record
+          , "sequence" .= chatSequence record
+          , "playerId" .= chatSenderId record
+          , "message" .= chatText record
+          ]
+
+      MsgChatHistorySnapshot roomId records ->
+        object
+          [ "type" .= ("ChatHistorySnapshot" :: String)
+          , "roomId" .= roomId
+          , "messages" .=
+              [ object
+                  [ "day" .= chatDay record
+                  , "channel" .= show (chatChannel record)
+                  , "messageId" .= chatMessageId record
+                  , "sequence" .= chatSequence record
+                  , "senderId" .= chatSenderId record
+                  , "text" .= chatText record
+                  ]
+              | record <- records
+              ]
+          ]
+
+      MsgSessionEstablished roomId playerId sessionToken ->
+        object
+          [ "type" .= ("SessionEstablished" :: String)
+          , "roomId" .= roomId
+          , "playerId" .= playerId
+          , "sessionToken" .= sessionToken
           ]
