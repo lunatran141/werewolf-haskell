@@ -54,6 +54,7 @@ import Domain.Types
   , GameState(..)
   , Player(..)
   , PlayerId
+  , LifeStatus(..)
   , Phase(..)
   , NightChoice(..)
   , Role(..)
@@ -153,6 +154,19 @@ privateActionStateMessage rid actor state =
     actorHasRole role = any
       (\player -> playerId player == actor && playerRole player == Just role)
       (gamePlayers state)
+
+discussionSkipStateMessage :: RoomId -> PlayerId -> GameState -> ServerMessage
+discussionSkipStateMessage rid actor state =
+  MsgDiscussionSkipState rid submitted total hasSkipped
+  where
+    livingPlayers =
+      [ player
+      | player <- gamePlayers state
+      , playerLifeStatus player == Alive
+      ]
+    submitted = length (gameDiscussionSkips state)
+    total = length livingPlayers
+    hasSkipped = actor `elem` gameDiscussionSkips state
 
 isRoleAssignment :: DomainEvent -> Bool
 isRoleAssignment event =
@@ -357,6 +371,11 @@ beginSession room actor sessionRef outbound = do
       then writeTQueue outbound (votingSnapshot (roomId room) actor state)
       else pure ()
 
+    if gamePhase state == Day
+      then writeTQueue outbound
+        (discussionSkipStateMessage (roomId room) actor state)
+      else pure ()
+
     case gameResult state of
       Just result -> do
         writeTQueue outbound (MsgGameFinished (roomId room) result)
@@ -431,6 +450,10 @@ beginSession room actor sessionRef outbound = do
     if gamePhase (updateState update) /= Lobby
       then do
         sendToClient outbound (votingSnapshot (roomId room) actor (updateState update))
+        if gamePhase (updateState update) == Day
+          then sendToClient outbound
+            (discussionSkipStateMessage (roomId room) actor (updateState update))
+          else pure ()
         sendPhaseTimeRemaining outbound room
       else pure ()
 
@@ -985,6 +1008,11 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
     ClientChannelChat requestId rid channel messageText ->
       handlePlayerCommand requestId rid
         (ChatInChannel actor channel messageText)
+
+    -- Mỗi người còn sống xác nhận một lần; Engine chỉ chuyển sang Voting
+    -- khi toàn bộ người còn sống trong phòng đã đồng ý.
+    ClientSkipDiscussion requestId rid ->
+      handlePlayerCommand requestId rid (SkipDiscussion actor)
   where
     handlePlayerCommand requestId rid command = do
       currentActor <- readIORef actorRef

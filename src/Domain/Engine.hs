@@ -172,6 +172,7 @@ startGame state actor shuffledRoles = do
           , gamePhase = Night
           , gameDay = 1
           , gameVotes = []
+          , gameDiscussionSkips = []
           , gameNightActions = []
           , gameWolfVotingClosed = False
           , gameWitchHealReady = True
@@ -210,6 +211,7 @@ advancePhase state =
                 state
                   { gamePhase = Voting
                   , gameVotes = []
+                  , gameDiscussionSkips = []
                   , gameNightResolved = False
                   , gameVotingResolved = False
                   }
@@ -277,6 +279,7 @@ finishResolvedPhase expectedPhase continuePhase state result = do
           , gameNightActions = []
           , gameWolfVotingClosed = False
           , gameVotes = []
+          , gameDiscussionSkips = []
           , gameNightResolved = False
           , gameVotingResolved = False
           , gameResult = result
@@ -497,9 +500,35 @@ applyCommand state command
         Vote actor target -> castVote state actor target
         Chat actor message -> sendChat state actor message
         ChatInChannel actor channel message -> sendChatInChannel state actor channel message
+        SkipDiscussion actor -> skipDiscussion state actor
         ResolveNight -> applyNightCommand state command
         ResolveVoting -> resolveVoting state
         ResolveHunter actor target -> resolveHunterShot state actor target
+
+-- Người còn sống có thể đồng ý kết thúc sớm phần thảo luận. Chỉ khi toàn bộ
+-- người còn sống đã đồng ý, Engine mới chuyển Day sang Voting.
+skipDiscussion
+  :: GameState
+  -> PlayerId
+  -> Either GameError (GameState, [DomainEvent])
+skipDiscussion state actor = do
+  if gamePhase state == Day then Right () else Left WrongPhase
+  player <- validatePlayerExists actor (gamePlayers state)
+  _ <- validatePlayerAlive player
+  if actor `elem` gameDiscussionSkips state
+    then Left AlreadySkippedDiscussion
+    else Right ()
+  let aliveIds =
+        [ playerId current
+        | current <- gamePlayers state
+        , playerLifeStatus current == Alive
+        ]
+      approvedState = state
+        { gameDiscussionSkips = gameDiscussionSkips state ++ [actor] }
+  validateGameInvariant approvedState
+  if all (`elem` gameDiscussionSkips approvedState) aliveIds
+    then advancePhase approvedState
+    else pure (approvedState, [])
 
 -- T06: Nhận một phiếu hợp lệ và chỉ thêm đúng một bản ghi vào round hiện tại.
 -- Nếu validation lỗi thì state và event đều không thay đổi.

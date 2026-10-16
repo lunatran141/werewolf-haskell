@@ -402,6 +402,46 @@ main =
         decode (encode client) `shouldBe` Just client
         decode (encode server) `shouldBe` Just server
 
+      it "SkipDiscussion va tien do xac nhan JSON round-trip" $ do
+        let client = ClientSkipDiscussion "skip-1" "ROOM-01"
+            server = MsgDiscussionSkipState "ROOM-01" 3 7 True
+        decode (encode client) `shouldBe` Just client
+        decode (encode server) `shouldBe` Just server
+
+    describe "T07 - bo qua thoi gian thao luan" $ do
+      let roster =
+            [ (Werewolf, Alive), (Werewolf, Alive), (Seer, Alive)
+            , (Guard, Alive), (Witch, Alive), (Hunter, Alive)
+            , (Villager, Alive), (Villager, Alive)
+            ]
+          dayState = (testState Day Nothing roster)
+            { gameConfiguredRoles = map fst roster }
+
+      it "chua du tat ca nguoi song thi van o Day" $ do
+        let Right (next, events) = applyCommand dayState (SkipDiscussion "p1")
+        gamePhase next `shouldBe` Day
+        gameDiscussionSkips next `shouldBe` ["p1"]
+        events `shouldBe` []
+
+      it "du tat ca nguoi song thi chuyen ngay sang Voting" $ do
+        let beforeLast = dayState
+              { gameDiscussionSkips = ["p1", "p2", "p3", "p4", "p5", "p6", "p7"] }
+            Right (next, events) = applyCommand beforeLast (SkipDiscussion "p8")
+        gamePhase next `shouldBe` Voting
+        gameDiscussionSkips next `shouldBe` []
+        events `shouldBe` [PhaseChanged Voting]
+
+      it "khong cho bam hai lan hoac bam khi da chet" $ do
+        let already = dayState {gameDiscussionSkips = ["p1"]}
+            dead = dayState
+              { gamePlayers =
+                  map (\p -> if playerId p == "p1"
+                    then p {playerLifeStatus = Dead} else p) (gamePlayers dayState) }
+        applyCommand already (SkipDiscussion "p1")
+          `shouldBe` Left AlreadySkippedDiscussion
+        applyCommand dead (SkipDiscussion "p1")
+          `shouldBe` Left DeadPlayer
+
     describe "T07 - huong dan vai tro" $ do
       it "mo ta cua tat ca vai duoc gui bang tieng Viet co dau" $ do
         let roles = [Werewolf, Seer, Guard, Witch, Hunter, Villager]

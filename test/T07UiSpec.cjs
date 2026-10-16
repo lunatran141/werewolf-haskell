@@ -149,6 +149,27 @@ test('Dashboard dùng appearance của Server cho mọi người chơi', () => {
   assert.match(secondAvatar.innerHTML, /#064E3B/i);
 });
 
+test('Create/Join gửi ngoại hình đã chọn tới Server', () => {
+  const {get, connection} = setup();
+  get('room-id').value = 'ROOM-AVATAR';
+  get('player-name').value = 'Người chơi mới';
+  get('appearance-hair').value = 'ponytail';
+  get('appearance-hair-color').value = '#EC4899';
+  get('appearance-skin').value = '#C28865';
+  get('appearance-outfit').value = '#064E3B';
+  get('appearance-accessory').value = 'flower_crown';
+
+  get('join-form').fire('submit');
+
+  const command = connection.sent.at(-1);
+  assert.equal(command.type, 'JoinGame');
+  assert.equal(command.roomId, 'ROOM-AVATAR');
+  assert.deepEqual(command.appearance, {
+    hair: 'ponytail', hairColor: '#EC4899', skin: '#C28865',
+    outfit: '#064E3B', accessory: 'flower_crown'
+  });
+});
+
 test('Có thể chọn mục tiêu Voting trực tiếp bằng ô người chơi', () => {
   const {get, message, players} = setup();
   message({type: 'VotingSnapshot', roomId: 'R', phase: 'Voting', day: 1,
@@ -195,6 +216,42 @@ test('Server đồng bộ thời gian Day/Voting và đồng hồ Day ẩn khi s
   message({type: 'PhaseTimeRemaining', roomId: 'R', phase: 'Voting', day: 1,
     remainingMs: 30000});
   assert.equal(get('vote-clock-value').textContent, '00:30');
+});
+
+test('Chỉ hiển thị bảng Voting sau khi Server chuyển đúng sang Voting', () => {
+  const {get, message, players} = setup('Seer');
+  assert.equal(get('voting-section').hidden, true, 'Day chỉ hiện phần thảo luận');
+
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 1,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  assert.equal(get('voting-section').hidden, true, 'Night phải chờ các vai hành động');
+
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Voting', day: 1,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  assert.equal(get('voting-section').hidden, false);
+});
+
+test('Nút bỏ qua thảo luận chờ đủ người sống rồi Server mới mở Voting', () => {
+  const {get, message, connection, players} = setup();
+  message({type: 'DiscussionSkipState', roomId: 'R', submitted: 0,
+    total: 2, hasSkipped: false});
+  assert.equal(get('discussion-skip-panel').hidden, false);
+  assert.match(get('discussion-skip-status').textContent, /0\/2/);
+
+  get('discussion-skip-button').fire('click');
+  assert.equal(connection.sent.at(-1).type, 'SkipDiscussion');
+
+  message({type: 'ActionAccepted', roomId: 'R',
+    requestId: connection.sent.at(-1).requestId});
+  message({type: 'DiscussionSkipState', roomId: 'R', submitted: 1,
+    total: 2, hasSkipped: true});
+  assert.equal(get('discussion-skip-button').disabled, true);
+  assert.match(get('discussion-skip-button').textContent, /Chờ người còn lại/);
+
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Voting', day: 1,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  assert.equal(get('discussion-skip-panel').hidden, true);
+  assert.equal(get('voting-section').hidden, false);
 });
 
 test('Phù Thủy chờ Sói chốt phiếu rồi mới được cứu, dùng độc hoặc bỏ lượt', () => {
