@@ -12,15 +12,18 @@ import Control.Concurrent.STM
   , newTVarIO
   )
 import Domain.Types
-  ( Command
+  ( ChatRecord
+  , Command
   , DomainEvent
   , GameError
   , GameState
+  , Phase
   , PlayerId
   , emptyLobby
   )
 import Protocol.Types (RequestId, RoomId)
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
+import Data.Word (Word64)
 
 -- Lệnh đã được Server gắn thông tin người gửi.
 -- PlayerId phải lấy từ phiên kết nối, không lấy từ JSON của Browser.
@@ -36,6 +39,7 @@ data RoomUpdate = RoomUpdate
   { updateVersion :: Int
   , updateState   :: GameState
   , updateEvents  :: [DomainEvent]
+  , updateChatRecord :: Maybe ChatRecord
   }
 
 data RoomRuntime = RoomRuntime
@@ -45,8 +49,16 @@ data RoomRuntime = RoomRuntime
   , roomCommands :: TBQueue QueuedCommand
   , roomUpdates  :: TChan RoomUpdate
   , roomNextPlayerId :: TVar Int
-  -- Request Vote/Hunter đã thành công, lưu theo actor suốt vòng đời phòng.
+  -- Request Vote/Hunter/Chat đã thành công, lưu theo actor suốt vòng đời phòng.
   , roomAcceptedRequests :: TVar [(PlayerId, RequestId)]
+  -- T07: Lịch sử chat thuộc về phòng, không phụ thuộc vòng đời kết nối.
+  , roomChatHistory :: TVar [ChatRecord]
+  -- Sequence tăng dần giúp mọi client sắp xếp và khử tin trùng ổn định.
+  , roomNextChatSequence :: TVar Int
+  -- Token chỉ dùng để nối lại đúng PlayerId sau khi WebSocket bị ngắt.
+  , roomReconnectTokens :: TVar [(String, PlayerId)]
+  -- Mốc monotonic của cửa sổ Day/Voting/Hunter để reconnect không reset giờ.
+  , roomPhaseDeadline :: TVar (Maybe (Phase, Int, Word64))
   }
 
 newRoomRuntime :: RoomId -> IO RoomRuntime
@@ -57,6 +69,10 @@ newRoomRuntime rid = do
   updateChannel <- newBroadcastTChanIO
   playerIdCounter <- newTVarIO 1
   acceptedRequests <- newTVarIO []
+  chatHistory <- newTVarIO []
+  nextChatSequence <- newTVarIO 1
+  reconnectTokens <- newTVarIO []
+  phaseDeadline <- newTVarIO Nothing
   pure RoomRuntime
     { roomId = rid
     , roomState = stateVar
@@ -65,6 +81,10 @@ newRoomRuntime rid = do
     , roomUpdates = updateChannel
     , roomNextPlayerId = playerIdCounter
     , roomAcceptedRequests = acceptedRequests
+    , roomChatHistory = chatHistory
+    , roomNextChatSequence = nextChatSequence
+    , roomReconnectTokens = reconnectTokens
+    , roomPhaseDeadline = phaseDeadline
     }
 
 -- Danh sách các phòng đã tạo. MVar bảo vệ thao tác kiểm tra mã trùng

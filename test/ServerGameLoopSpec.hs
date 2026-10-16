@@ -150,7 +150,7 @@ main = hspec $ describe "T08 Lobby GameLoop" $ do
 
   it "Event chia vai khong di qua Broadcast Lobby" $ do
     let update =
-          RoomUpdate 1 emptyLobby [PlayerRoleAssigned "p1" Werewolf]
+          RoomUpdate 1 emptyLobby [PlayerRoleAssigned "p1" Werewolf] Nothing
 
     lobbyMessages "ROOM-01" update `shouldBe` []
 

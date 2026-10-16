@@ -5,21 +5,29 @@ module Server.Broadcast
   , lobbyMessages
   , lobbyReply
   , nightMessagesFor
+  , nightMessagesForState
   , votingSnapshot
+  , chatHistorySnapshot
+  , chatMessageForState
   ) where
 
 import Data.Maybe (mapMaybe)
 
 import Domain.Types
-  ( Command(..)
+  ( ChatChannel(..)
+  , ChatRecord(..)
+  , Command(..)
   , DomainEvent(..)
   , EventVisibility(..)
   , GameError(..)
   , GameState(..)
   , Player(..)
   , PlayerId
+  , Role(..)
   , LifeStatus(..)
+  , Team
   , eventVisibility
+  , teamOfRole
   )
 
 import Protocol.Types
@@ -31,6 +39,42 @@ import Protocol.Types
   )
 
 import Server.Room (RoomUpdate(..))
+
+-- T07: Snapshot lịch sử được lọc riêng cho từng kết nối. Chat công khai có
+-- thể xem lại; chat Sói chỉ được gửi cho Sói còn sống.
+chatHistorySnapshot
+  :: RoomId
+  -> PlayerId
+  -> GameState
+  -> [ChatRecord]
+  -> ServerMessage
+chatHistorySnapshot rid recipient state records =
+  MsgChatHistorySnapshot rid (filter canReceive records)
+  where
+    recipientIsLivingWolf =
+      any
+        (\player ->
+          playerId player == recipient
+            && playerLifeStatus player == Alive
+            && playerRole player == Just Werewolf)
+        (gamePlayers state)
+
+    canReceive record =
+      case chatChannel record of
+        PublicDay -> True
+        WolvesNight -> recipientIsLivingWolf
+
+-- Cùng một bộ lọc quyền với snapshot, nhưng dành cho tin vừa được commit.
+chatMessageForState
+  :: RoomId
+  -> PlayerId
+  -> GameState
+  -> ChatRecord
+  -> Maybe ServerMessage
+chatMessageForState rid recipient state record =
+  case chatHistorySnapshot rid recipient state [record] of
+    MsgChatHistorySnapshot _ [_] -> Just (MsgStoredChatMessage rid record)
+    _ -> Nothing
 
 -- T06: Người chết đang chờ Hunter vẫn hiển thị như trước batch với người khác.
 -- Chỉ Hunter biết mình có quyền bắn; không lộ danh sách chết trước reveal.
@@ -203,6 +247,14 @@ nightMessagesFor rid recipient events =
         SeerResult _ team ->
           Just (MsgSeerResult rid team)
 
+        -- Tiến độ và kết quả khóa phiếu chỉ được TeamOnly Wolves nhận.
+        -- Không gửi lựa chọn cá nhân của từng Sói để tránh lộ phiếu riêng.
+        WolfVoteUpdated submitted total ->
+          Just (MsgWolfVoteUpdated rid submitted total)
+
+        WolfTargetLocked target ->
+          Just (MsgWolfTargetLocked rid target)
+
         -- Nan nhan Soi chi gui rieng cho Phu Thuy.
         WitchVictimNotice _ victim ->
           Just (MsgWitchVictimNotice rid victim)
@@ -253,6 +305,53 @@ nightMessagesFor rid recipient events =
         PlayerEliminated pid ->
           Just (MsgPlayerEliminated rid pid)
 
-        -- Khong chuyen event khac chua co JSON contract.
+        ChatMessage playerId messageText ->
+          Just (MsgChatMessage rid playerId messageText)
+
+        -- Khong gui event chua co JSON Contract.
         _ ->
           Nothing
+
+-- T07: Phiên bản có GameState để kiểm TeamOnly ở phía server.
+-- Không tin vai hoặc kênh do browser tự khai báo khi quyết định người nhận.
+nightMessagesForState
+  :: RoomId
+  -> PlayerId
+  -> GameState
+  -> [DomainEvent]
+  -> [ServerMessage]
+nightMessagesForState rid recipient state events =
+  mapMaybe convert (filter canReceive events)
+  where
+    canReceive event =
+      case eventVisibility event of
+        Public -> True
+        Private pid -> recipient == pid
+        TeamOnly team -> recipientIsAliveTeam team
+
+    recipientIsAliveTeam :: Team -> Bool
+    recipientIsAliveTeam team =
+      any
+        (\player ->
+          playerId player == recipient
+            && playerLifeStatus player == Alive
+            && fmap teamOfRole (playerRole player) == Just team)
+        (gamePlayers state)
+
+    convert event =
+      case event of
+        ChatMessageInChannel channel playerId messageText ->
+          Just
+            (MsgChannelChatMessage
+              rid (gameDay state) channel playerId messageText)
+        -- Hai event TeamOnly đã được kiểm tra vai và trạng thái sống ở trên.
+        -- Không gọi lại nightMessagesFor vì phiên bản không có GameState phải
+        -- từ chối mọi TeamOnly để tránh tin dữ liệu vai từ client.
+        WolfVoteUpdated submitted total ->
+          Just (MsgWolfVoteUpdated rid submitted total)
+        WolfTargetLocked target ->
+          Just (MsgWolfTargetLocked rid target)
+        _ ->
+          case nightMessagesFor rid recipient [event] of
+            message : _ -> Just message
+            [] -> Nothing

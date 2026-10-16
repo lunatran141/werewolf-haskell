@@ -32,6 +32,8 @@ import Control.Concurrent.STM
 
   , writeTVar
 
+  , modifyTVar'
+
   )
 
 import Control.Exception (finally)
@@ -39,6 +41,9 @@ import Control.Exception (finally)
 import Control.Monad (forM_, forever)
 
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import Data.Word (Word64)
+import Numeric (showHex)
+import GHC.Clock (getMonotonicTimeNSec)
 
 import Domain.RoleShuffle (shuffleRoles)
 
@@ -51,6 +56,7 @@ import Domain.Types
   , PlayerId
   , Phase(..)
   , NightChoice(..)
+  , Role(..)
   )
 
 import Domain.Validation (expectedRoles)
@@ -87,8 +93,10 @@ import Server.Broadcast
 
   , lobbySnapshot
 
-  , nightMessagesFor
+  , nightMessagesForState
   , votingSnapshot
+  , chatHistorySnapshot
+  , chatMessageForState
   )
 
 import Server.GameLoop
@@ -109,7 +117,7 @@ import Server.Room
 
   )
 
-import System.Random (newStdGen)
+import System.Random (newStdGen, randomIO)
 
 -- Gui ServerMessage vao hang doi cua mot ket noi.
 
@@ -118,6 +126,39 @@ sendToClient :: TQueue ServerMessage -> ServerMessage -> IO ()
 sendToClient outbound message =
 
   atomically (writeTQueue outbound message)
+
+-- Chỉ Server suy ra danh sách đồng đội từ GameState. Browser không được tự
+-- khai mình là Sói để xin dữ liệu này.
+wolfTeamMessage :: RoomId -> PlayerId -> GameState -> Maybe ServerMessage
+wolfTeamMessage rid actor state =
+  case filter ((== actor) . playerId) (gamePlayers state) of
+    player : _
+      | playerRole player == Just Werewolf ->
+          Just (MsgWolfTeam rid
+            [ playerId teammate
+            | teammate <- gamePlayers state
+            , playerRole teammate == Just Werewolf
+            ])
+    _ -> Nothing
+
+privateActionStateMessage :: RoomId -> PlayerId -> GameState -> ServerMessage
+privateActionStateMessage rid actor state =
+  MsgPrivateActionState
+    rid
+    (actor `elem` map fst (gameNightActions state))
+    (if actorHasRole Witch then Just (gameWitchHealReady state) else Nothing)
+    (if actorHasRole Witch then Just (gameWitchPoisonReady state) else Nothing)
+    (if actorHasRole Guard then gameLastProtected state else Nothing)
+  where
+    actorHasRole role = any
+      (\player -> playerId player == actor && playerRole player == Just role)
+      (gamePlayers state)
+
+isRoleAssignment :: DomainEvent -> Bool
+isRoleAssignment event =
+  case event of
+    PlayerRoleAssigned _ _ -> True
+    _ -> False
 
 -- Gui CommandRejected cho ket noi da gui yeu cau.
 
@@ -259,6 +300,15 @@ safeNightEvent event =
 
       True
 
+-- Chat đã lưu được phát bằng MsgStoredChatMessage để mang ID/sequence.
+-- Không phát lại DomainEvent chat theo contract cũ trong cùng update.
+isChatEvent :: DomainEvent -> Bool
+isChatEvent event =
+  case event of
+    ChatMessage _ _ -> True
+    ChatMessageInChannel _ _ _ -> True
+    _ -> False
+
 -- Gui LobbySnapshot va dang ky nhan RoomUpdate.
 
 beginSession
@@ -281,11 +331,51 @@ beginSession room actor sessionRef outbound = do
 
     state <- readTVar (roomState room)
 
+    history <- readTVar (roomChatHistory room)
+
     writeTQueue outbound
 
       (lobbySnapshot (roomId room) actor state)
 
+    -- Reconnect cần phục hồi dữ liệu riêng sau snapshot công khai.
+    case filter ((== actor) . playerId) (gamePlayers state) of
+      player : _ ->
+        case playerRole player of
+          Just role -> writeTQueue outbound (MsgYourRole (roomId room) role)
+          Nothing -> pure ()
+      [] -> pure ()
+
+    forM_ (wolfTeamMessage (roomId room) actor state)
+      (writeTQueue outbound)
+
+    if gamePhase state /= Lobby
+      then writeTQueue outbound
+        (privateActionStateMessage (roomId room) actor state)
+      else pure ()
+
+    if gamePhase state /= Lobby
+      then writeTQueue outbound (votingSnapshot (roomId room) actor state)
+      else pure ()
+
+    case gameResult state of
+      Just result -> do
+        writeTQueue outbound (MsgGameFinished (roomId room) result)
+        writeTQueue outbound
+          (MsgGameRolesRevealed (roomId room)
+            [ (playerId player, role)
+            | player <- gamePlayers state
+            , Just role <- [playerRole player]
+            ])
+      Nothing -> pure ()
+
+    if null history
+      then pure ()
+      else writeTQueue outbound
+        (chatHistorySnapshot (roomId room) actor state history)
+
     pure channel
+
+  sendPhaseTimeRemaining outbound room
 
   broadcastThread <- forkIO $ forever $ do
 
@@ -303,20 +393,82 @@ beginSession room actor sessionRef outbound = do
 
     -- T05: Loc event theo quyen nhan cua PlayerId.
 
-    let safeEvents = filter safeNightEvent (updateEvents update)
+    let safeEvents =
+          filter safeNightEvent
+            (if updateChatRecord update == Nothing
+              then updateEvents update
+              else filter (not . isChatEvent) (updateEvents update))
 
         nightMessages =
 
-          nightMessagesFor (roomId room) actor safeEvents
+          nightMessagesForState
+            (roomId room) actor (updateState update) safeEvents
 
     forM_ nightMessages (sendToClient outbound)
 
+    -- StartGame vừa gán vai: gửi danh sách đồng đội riêng cho đúng phe Sói.
+    -- Reconnect đã được phục hồi ở phần snapshot đầu phiên phía trên.
+    if any isRoleAssignment (updateEvents update)
+      then forM_
+        (wolfTeamMessage (roomId room) actor (updateState update))
+        (sendToClient outbound)
+      else pure ()
+
+    -- Luôn đồng bộ trạng thái riêng sau update để reconnect/UI không mở lại
+    -- hành động hoặc bình thuốc đã dùng. Message này chỉ đi tới kết nối actor.
+    if gamePhase (updateState update) /= Lobby
+      then sendToClient outbound
+        (privateActionStateMessage (roomId room) actor (updateState update))
+      else pure ()
+
+    -- Tin chat trực tiếp dùng chính record đã commit để ID/sequence khớp snapshot.
+    forM_
+      (updateChatRecord update >>= chatMessageForState
+        (roomId room) actor (updateState update))
+      (sendToClient outbound)
+
     -- Snapshot sau event giữ UI đồng bộ theo state đã commit; Lobby giữ contract cũ.
     if gamePhase (updateState update) /= Lobby
-      then sendToClient outbound (votingSnapshot (roomId room) actor (updateState update))
+      then do
+        sendToClient outbound (votingSnapshot (roomId room) actor (updateState update))
+        sendPhaseTimeRemaining outbound room
       else pure ()
 
   writeIORef sessionRef (Just (room, broadcastThread))
+
+-- Chuyển deadline monotonic nội bộ thành thời lượng còn lại. Browser không cần
+-- dùng cùng đồng hồ với Server và reconnect không làm cửa sổ chạy lại từ đầu.
+sendPhaseTimeRemaining :: TQueue ServerMessage -> RoomRuntime -> IO ()
+sendPhaseTimeRemaining outbound room = do
+  phaseDeadline <- readTVarIO (roomPhaseDeadline room)
+  case phaseDeadline of
+    Nothing -> pure ()
+    Just (phase, day, deadlineNs) -> do
+      now <- getMonotonicTimeNSec
+      let remainingMs = fromIntegral ((deadlineNs - min deadlineNs now) `div` 1000000)
+      sendToClient outbound
+        (MsgPhaseTimeRemaining (roomId room) phase day remainingMs)
+
+-- Token ngẫu nhiên không mang thông tin vai trò hay trạng thái ván.
+newSessionToken :: IO String
+newSessionToken = do
+  first <- randomIO :: IO Word64
+  second <- randomIO :: IO Word64
+  pure (showHex first "" ++ showHex second "")
+
+establishNewSession
+  :: RoomRuntime
+  -> PlayerId
+  -> IORef (Maybe (RoomRuntime, ThreadId))
+  -> TQueue ServerMessage
+  -> IO ()
+establishNewSession room actor sessionRef outbound = do
+  token <- newSessionToken
+  atomically $
+    modifyTVar' (roomReconnectTokens room)
+      (((token, actor) :) . filter ((/= actor) . snd))
+  sendToClient outbound (MsgSessionEstablished (roomId room) actor token)
+  beginSession room actor sessionRef outbound
 
 -- Tra loi khi tao phong that bai.
 
@@ -476,7 +628,7 @@ handleClientMessage
 
   -> (RoomRuntime -> IO ())
 
-  -> PlayerId
+  -> IORef PlayerId
 
   -> IORef (Maybe (RoomRuntime, ThreadId))
 
@@ -486,9 +638,37 @@ handleClientMessage
 
   -> IO ()
 
-handleClientMessage registry startWorker actor sessionRef outbound message =
+handleClientMessage registry startWorker actorRef sessionRef outbound message = do
+
+  actor <- readIORef actorRef
 
   case message of
+
+    ClientReconnect requestId rid token -> do
+      current <- readIORef sessionRef
+      case current of
+        Just _ ->
+          reject outbound requestId "ALREADY_JOINED" "Ban da o trong mot phong."
+        Nothing -> do
+          found <- withMVar (registryRooms registry) $ \rooms ->
+            case lookup rid rooms of
+              Nothing -> pure Nothing
+              Just room -> do
+                tokens <- readTVarIO (roomReconnectTokens room)
+                state <- readTVarIO (roomState room)
+                pure $ case lookup token tokens of
+                  Just restoredActor
+                    | any ((== restoredActor) . playerId) (gamePlayers state) ->
+                        Just (room, restoredActor)
+                  _ -> Nothing
+          case found of
+            Nothing ->
+              reject outbound requestId "INVALID_SESSION"
+                "Phien choi khong con hop le. Hay tham gia lai."
+            Just (room, restoredActor) -> do
+              writeIORef actorRef restoredActor
+              sendToClient outbound (MsgSessionEstablished rid restoredActor token)
+              beginSession room restoredActor sessionRef outbound
 
     -- Tao phong.
 
@@ -520,7 +700,7 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
 
             Right (room, _) ->
 
-              beginSession room actor sessionRef outbound
+              establishNewSession room actor sessionRef outbound
 
 
     -- Tao phong voi Appearance do nguoi choi chon.
@@ -543,7 +723,7 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
                 (createErrorReply requestId rid actor name err)
 
             Right (room, _) ->
-              beginSession room actor sessionRef outbound
+              establishNewSession room actor sessionRef outbound
 
 
     -- Tham gia phong.
@@ -598,7 +778,7 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
 
                 Right _ ->
 
-                  beginSession room actor sessionRef outbound
+                  establishNewSession room actor sessionRef outbound
 
 
     -- Tham gia phong voi Appearance do nguoi choi chon.
@@ -634,7 +814,7 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
                     (lobbyReply rid requestId actor command result)
 
                 Right _ ->
-                  beginSession room actor sessionRef outbound
+                  establishNewSession room actor sessionRef outbound
 
 
     -- Roi phong.
@@ -672,6 +852,10 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
               case result of
 
                 Right _ -> do
+
+                  atomically $
+                    modifyTVar' (roomReconnectTokens room)
+                      (filter ((/= actor) . snd))
 
                   killThread broadcastThread
 
@@ -785,15 +969,25 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
     -- NightChoice chỉ là payload; Domain ResolveHunter kiểm tra quyền pending.
     ClientHunterAction requestId rid choice ->
       case choice of
-        HunterShot target -> handleVotingCommand requestId rid (ResolveHunter actor (Just target))
-        HunterPass -> handleVotingCommand requestId rid (ResolveHunter actor Nothing)
+        HunterShot target -> handlePlayerCommand requestId rid (ResolveHunter actor (Just target))
+        HunterPass -> handlePlayerCommand requestId rid (ResolveHunter actor Nothing)
         _ -> reject outbound requestId "INVALID_HUNTER_ACTION" "Lựa chọn Hunter không hợp lệ."
 
     -- Vote chỉ nhận mục tiêu; không nhận ID hoặc vai do Browser khai báo.
     ClientVote requestId rid target ->
-      handleVotingCommand requestId rid (Vote actor target)
+      handlePlayerCommand requestId rid (Vote actor target)
+
+    -- T07: Chat chi hop le trong Day va voi nguoi con song.
+    ClientChat requestId rid messageText ->
+      handlePlayerCommand requestId rid (Chat actor messageText)
+
+    -- T07: Kênh do client yêu cầu vẫn được Domain xác thực theo phase/vai/life.
+    ClientChannelChat requestId rid channel messageText ->
+      handlePlayerCommand requestId rid
+        (ChatInChannel actor channel messageText)
   where
-    handleVotingCommand requestId rid command = do
+    handlePlayerCommand requestId rid command = do
+      currentActor <- readIORef actorRef
       current <- readIORef sessionRef
 
       case current of
@@ -807,7 +1001,7 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
                 "Ban khong o trong phong nay."
 
           | otherwise -> do
-              result <- submitCommand room requestId actor command
+              result <- submitCommand room requestId currentActor command
 
               case result of
                 Left err ->
@@ -820,6 +1014,8 @@ handleClientMessage registry startWorker actor sessionRef outbound message =
                 Right _ ->
                   -- Receipt theo requestId để UI chỉ kết thúc đúng yêu cầu đang chờ.
                   sendToClient outbound (MsgActionAccepted requestId rid)
+
+-- Tao WebSocket connection va session.
 
 webSocketApp
 
@@ -844,6 +1040,8 @@ webSocketApp registry startWorker pending = do
     pure ("p" ++ show nextId)
 
   sessionRef <- newIORef Nothing
+
+  actorRef <- newIORef actor
 
   outbound <- newTQueueIO
 
@@ -881,7 +1079,7 @@ webSocketApp registry startWorker pending = do
 
                   startWorker
 
-                  actor
+                  actorRef
 
                   sessionRef
 
@@ -903,12 +1101,9 @@ webSocketApp registry startWorker pending = do
 
         case current of
 
-          Just (room, broadcastThread) -> do
+          Just (_, broadcastThread) -> do
 
-            -- Dong ket noi duoc xu ly nhu Leave.
-
-            _ <- leaveAndPrune registry room "disconnect" actor
-
+            -- Mất kết nối không xóa Player; token cho phép nối lại đúng phiên.
             killThread broadcastThread
 
           Nothing ->

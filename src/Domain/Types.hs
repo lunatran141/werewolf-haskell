@@ -34,44 +34,44 @@ roleAbilityInfo role =
     Werewolf ->
       RoleAbilityInfo
         Werewolf
-        "Moi dem chon mot nguoi thuoc phe Village de can. Moi Soi song co mot phieu; muc tieu co so phieu cao nhat duy nhat se bi tan cong."
+        "Mỗi đêm, mỗi Sói còn sống chọn một người thuộc phe Dân để cắn. Mỗi Sói có một phiếu; mục tiêu có số phiếu cao nhất duy nhất sẽ bị tấn công. Nếu hòa phiếu cao nhất hoặc không ai bỏ phiếu thì không có nạn nhân."
         (Just Night)
-        "Chi chon nguoi con song thuoc Village. Khong chon Soi dong doi."
+        "Chỉ chọn người còn sống thuộc phe Dân. Không được chọn Sói đồng đội."
 
     Seer ->
       RoleAbilityInfo
         Seer
-        "Moi dem soi mot nguoi de biet phe Wolves hoac Village cua nguoi do. Ket qua chi gui rieng cho Tien Tri."
+        "Mỗi đêm soi một người để biết người đó thuộc phe Sói hay phe Dân. Kết quả chỉ được gửi riêng cho Tiên Tri, không tiết lộ vai cụ thể."
         (Just Night)
-        "Chi chon nguoi con song khac ban than."
+        "Chỉ chọn một người còn sống khác bản thân."
 
     Guard ->
       RoleAbilityInfo
         Guard
-        "Moi dem bao ve mot nguoi khoi bi Soi can. Co the tu bao ve nhung khong duoc bao ve cung muc tieu trong hai dem lien tiep."
+        "Mỗi đêm bảo vệ một người khỏi bị Sói cắn. Có thể tự bảo vệ, nhưng không được bảo vệ cùng một người trong hai đêm liên tiếp."
         (Just Night)
-        "Chi chon nguoi con song. Khong trung muc tieu bao ve dem truoc."
+        "Chỉ chọn người còn sống. Không chọn lại mục tiêu đã bảo vệ ở đêm liền trước."
 
     Witch ->
       RoleAbilityInfo
         Witch
-        "Moi dem chon Heal, Poison hoac Pass. Moi binh Heal va Poison chi duoc su dung mot lan trong ca van. Heal chi cuu nan nhan Soi."
+        "Mỗi đêm chọn một hành động: cứu, đầu độc hoặc bỏ qua. Mỗi bình thuốc cứu và thuốc độc chỉ được dùng một lần trong cả ván. Thuốc cứu chỉ cứu nạn nhân bị Sói cắn."
         (Just Night)
-        "Heal chi kha dung sau khi khoa phieu Soi va co nan nhan. Poison chon nguoi con song khac ban than. Pass khong can muc tieu."
+        "Chỉ cứu sau khi đã chốt phiếu Sói và có nạn nhân. Đầu độc một người còn sống khác bản thân; bỏ qua không cần chọn mục tiêu."
 
     Hunter ->
       RoleAbilityInfo
         Hunter
-        "Khi chet do bat ky nguyen nhan nao, Tho San co the ban toi da mot nguoi khi Server kich hoat Hunter Shot."
+        "Khi chết vì bất kỳ nguyên nhân nào, Thợ Săn có thể bắn tối đa một người khi server mở lượt bắn."
         Nothing
-        "Chi duoc ban trong Hunter pending. Co the bo qua luot hoac het gio."
+        "Chỉ được bắn trong lượt dành riêng cho Thợ Săn. Có thể bỏ qua; hết thời gian mà chưa chọn cũng tính là bỏ qua."
 
     Villager ->
       RoleAbilityInfo
         Villager
-        "Tham gia thao luan ban ngay va bo phieu loai nguoi nghi la Soi. Khong co kha nang dac biet ban dem."
+        "Tham gia thảo luận ban ngày và bỏ phiếu loại người nghi là Sói. Không có khả năng đặc biệt vào ban đêm."
         (Just Voting)
-        "Khi Voting, chon nguoi con song khac ban than."
+        "Khi bỏ phiếu, chọn một người còn sống khác bản thân."
 
 data LifeStatus = Alive | Dead
   deriving (Eq, Show, Read)
@@ -169,6 +169,7 @@ data Command
   | NightAction PlayerId NightChoice
   | Vote PlayerId PlayerId
   | Chat PlayerId String
+  | ChatInChannel PlayerId ChatChannel String
   | ResolveNight
   | ResolveVoting
   | ResolveHunter PlayerId (Maybe PlayerId)
@@ -183,8 +184,8 @@ data GameError
   | RoomFull | InvalidRole | InvalidCommand | InvalidNightAction
   | InvalidRoleConfiguration | InvalidGameState
   | AbilityAlreadyUsed | HunterNotPending | InvalidTiePolicy
-  | DuplicateNightAction | EmptyChat | NotReady
-  -- T06: Mot request da thanh cong khong duoc phat lai o vong sau.
+  | DuplicateNightAction | EmptyChat | ChatTooLong | NotReady
+  -- T06: Một request đã thành công không được phát lại ở vòng sau.
   | DuplicateRequest
   | InvalidAppearance
   deriving (Eq, Show, Read)
@@ -227,6 +228,7 @@ data DomainEvent
   | GameEnded Team
   | GameFinished GameResult
   | ChatMessage PlayerId String
+  | ChatMessageInChannel ChatChannel PlayerId String
   deriving (Eq, Show)
 
 eventVisibility :: DomainEvent -> EventVisibility
@@ -244,6 +246,7 @@ eventVisibility event =
     VoteUpdated voter _      -> Private voter
     HunterShotPending pid    -> Private pid
     WitchVictimNotice pid _ -> Private pid
+    ChatMessageInChannel WolvesNight _ _ -> TeamOnly Wolves
     _                        -> Public
 
 -- Du lieu trang thai nghiep vu; khong chua connection/socket.

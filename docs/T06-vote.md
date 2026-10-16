@@ -4,9 +4,9 @@
 
 T06 xử lý từ lúc phòng vào Voting đến khi chốt phiếu, xử lý Hunter, công bố ID người chết và chuyển Night/GameOver. Theo hợp đồng T01/T02 mới, vai thật của mọi người chỉ được công khai tại GameOver. Hunter chết ở Night cũng được xử lý trước khi T05 hoàn tất sang Day. Không thay đổi preset 8/9 người, luật Night hay cách tăng vòng của T04.
 
-Bản ghép đã giữ StartGame, phân vai riêng tư và điều phối Night của T05 trên `develop` tại commit `73513ba`. Bộ điều phối chung vẫn cần gọi `atomically (applyInternalCommand room AdvancePhase)` khi hết Day; phòng phải đang có trạng thái Day hợp lệ. Đây là hàm Haskell nội bộ, không phải thông điệp được Browser quyền gửi. Không ghi thẳng TVar khi tích hợp vì sẽ bỏ qua event/version. Chưa thêm timer Day/Night ngoài phạm vi sửa conflict.
+Bản ghép đã giữ StartGame, phân vai riêng tư và điều phối Night của T05 trên `develop` tại commit `73513ba`. Bộ điều phối chung gọi `atomically (applyInternalCommand room AdvancePhase)` khi hết Day; phòng phải đang có trạng thái Day hợp lệ. Đây là hàm Haskell nội bộ, không phải thông điệp được Browser quyền gửi. Không ghi thẳng TVar vì sẽ bỏ qua event/version. Chưa thêm timer Night.
 
-Worker hiện có `runLobbyLoop` dùng chung queue và tự mở timer khi nhận thấy Voting. Mặc định Voting 60 giây, Hunter 30 giây; test truyền thời hạn ngắn qua `runGameLoopWithTimeouts`. Gửi phiếu không kéo dài timer. Hết hạn thì chốt dù chưa đủ phiếu; người chưa chọn được tính là bỏ qua, không tạo phiếu giả. Không thêm timer Day/Night hoặc nút Start thuộc phần khác.
+Worker `runLobbyLoop` dùng chung queue và tự mở timer khi nhận thấy Day hoặc Voting. Mặc định Day 180 giây, Voting 60 giây, Hunter 30 giây; test truyền thời hạn ngắn qua `runGameLoopWithPhaseTimeouts`. Chat và phiếu không kéo dài timer. Hết Day, server chuyển sang Voting; hết Voting, server chốt dù chưa đủ phiếu. Người chưa chọn được tính là bỏ qua, không tạo phiếu giả. Chưa thêm timer Night hoặc nút Start.
 
 ## Luồng thống nhất
 

@@ -17,10 +17,12 @@ import Domain.Validation
   , validateStartGame
   , validateNightAction
   , validateChat
+  , validateChatInChannel
   , validateHunterShot
   , validatePlayerAlive
   , validatePlayerExists
   , validateVote
+  , normalizePlayerName
   )
 -- Them nguoi choi vao Lobby.
 -- PlayerId do Server cap; validateJoin tao Player voi ten da chuan hoa.
@@ -121,20 +123,23 @@ applyLobbyCommand
   -> Either GameError (GameState, [DomainEvent])
 applyLobbyCommand state command =
   case command of
-    Join pid name ->
-      joinPlayer state pid name
-
+    Join pid name -> joinPlayer state pid name
     JoinWithAppearance pid name appearance ->
       joinPlayerWithAppearance state pid name appearance
+    Leave pid -> leavePlayer state pid
+    SetReady pid ready -> setPlayerReady state pid ready
+    _ -> Left InvalidCommand
 
-    Leave pid ->
-      leavePlayer state pid
+-- T07: Chat ban ngay la transition thuan tuy, khong thay doi GameState.
+applyChatCommand
+  :: GameState
+  -> Command
+  -> Either GameError (GameState, [DomainEvent])
+applyChatCommand state command =
+  case command of
+    Chat actor message -> sendChat state actor message
+    _ -> Left InvalidCommand
 
-    SetReady pid ready ->
-      setPlayerReady state pid ready
-
-    _ ->
-      Left InvalidCommand
 -- Bat dau van bang danh sach vai da duoc Server xao tron.
 -- Ham nay khong tu random va khong gui WebSocket.
 startGame
@@ -276,7 +281,7 @@ finishResolvedPhase expectedPhase continuePhase state result = do
           , gameVotingResolved = False
           , gameResult = result
           }
-      
+
       events =
         [PhaseChanged nextPhase] ++
         case result of
@@ -445,7 +450,7 @@ completeNightTurn state = do
   if gamePendingHunter state /= Nothing then Left HunterNotPending else Right ()
   validateGameInvariant state
 
-  
+
   let pendingIds = gamePendingReveals state
 
       -- Kiem tra tat ca nguoi cho chet da duoc danh dau Dead.
@@ -491,6 +496,7 @@ applyCommand state command
         NightAction _ _ -> applyNightCommand state command
         Vote actor target -> castVote state actor target
         Chat actor message -> sendChat state actor message
+        ChatInChannel actor channel message -> sendChatInChannel state actor channel message
         ResolveNight -> applyNightCommand state command
         ResolveVoting -> resolveVoting state
         ResolveHunter actor target -> resolveHunterShot state actor target
@@ -614,7 +620,7 @@ finishVotingDeaths state prefixEvents = do
   if gamePendingHunter state /= Nothing then Left HunterNotPending else Right ()
   if not (gameVotingResolved state) then Left InvalidGameState else Right ()
   validateGameInvariant state
-  
+
   let pendingIds = gamePendingReveals state
 
       -- Kiem tra nguoi cho cong bo da chet va co Role.
@@ -650,8 +656,21 @@ sendChat
   -> Either GameError (GameState, [DomainEvent])
 sendChat state actor message = do
   validateChat state actor message
-  validateGameInvariant state
-  pure (state, [ChatMessage actor message])
+  pure (state, [ChatMessage actor (normalizePlayerName message)])
+
+-- T07: Chat có kênh; WolvesNight được EventVisibility giới hạn cho phe Sói.
+sendChatInChannel
+  :: GameState
+  -> PlayerId
+  -> ChatChannel
+  -> String
+  -> Either GameError (GameState, [DomainEvent])
+sendChatInChannel state actor channel message = do
+  validateChatInChannel state actor channel message
+  pure
+    ( state
+    , [ChatMessageInChannel channel actor (normalizePlayerName message)]
+    )
 
 markDead :: PlayerId -> [Player] -> [Player]
 markDead targetId = map mark

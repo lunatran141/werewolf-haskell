@@ -1,19 +1,23 @@
 -- Kiểm thử T06 tại queue STM: xác thực session, commit Vote và chống trùng.
 module Main (main) where
 
+import Control.Concurrent (forkIO, killThread)
 import Control.Concurrent.STM
   ( atomically
+  , check
   , dupTChan
   , isEmptyTChan
   , newEmptyTMVarIO
   , readTChan
+  , readTVar
   , readTVarIO
   , takeTMVar
   , writeTBQueue
   , writeTVar
   )
+import Control.Exception (bracket)
 import Domain.Types
-import Server.GameLoop (processNextLobbyCommand)
+import Server.GameLoop (processNextLobbyCommand, runGameLoopWithPhaseTimeouts)
 import Server.Room
   ( QueuedCommand(..)
   , RoomRuntime(..)
@@ -21,6 +25,7 @@ import Server.Room
   , newRoomRuntime
   )
 import Test.Hspec
+import System.Timeout (timeout)
 
 roles8 :: [Role]
 roles8 = [Werewolf, Werewolf, Seer, Guard, Witch, Hunter, Villager, Villager]
@@ -54,6 +59,17 @@ submitVote room sessionActor commandActor = do
 
 main :: IO ()
 main = hspec $ describe "T06 GameLoop Vote" $ do
+  it "Day tu dong chuyen sang Voting sau thoi gian thao luan" $ do
+    room <- newRoomRuntime "ROOM-DAY"
+    atomically (writeTVar (roomState room) votingState {gamePhase = Day})
+    let waitForVoting = timeout 2000000 $ atomically $ do
+          state <- readTVar (roomState room)
+          check (gamePhase state == Voting)
+    bracket
+      (forkIO (runGameLoopWithPhaseTimeouts 50000 1000000 1000000 room))
+      killThread
+      (\_ -> waitForVoting `shouldReturn` Just ())
+
   it "Vote hop le duoc commit qua queue va phat event" $ do
     room <- newRoomRuntime "ROOM-01"
     updates <- atomically (dupTChan (roomUpdates room))

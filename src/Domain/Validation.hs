@@ -495,17 +495,8 @@ validateVote game actor target = do
 
 validateChat :: GameState -> PlayerId -> String -> Either GameError ()
 
-validateChat game actor message = do
-
-  validatePhase Day game
-
-  _ <- validatePlayerExists actor (gamePlayers game) >>= validatePlayerAlive
-
-  if all isSpace message
-
-    then Left EmptyChat
-
-    else Right ()
+validateChat game actor message =
+  validateChatInChannel game actor PublicDay message
 
 -- T02: Kiem tra chat theo kenh va quyen cua actor.
 -- Chi Server duoc xac dinh actor va room tu session.
@@ -537,6 +528,9 @@ validateChatInChannel game actor channel message = do
 
   if all isSpace message
     then Left EmptyChat
+    else Right ()
+  if length message > 300
+    then Left ChatTooLong
     else Right ()
 
 validateHunterShot
