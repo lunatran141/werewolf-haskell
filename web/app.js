@@ -58,6 +58,9 @@ const state = {
   chatBubbles: {},
   chatDay: null,
   chatChannel: "PublicDay",
+  discussionSkipsSubmitted: 0,
+  discussionSkipsTotal: 0,
+  hasSkippedDiscussion: false,
   appearance: null
 };
 
@@ -139,6 +142,9 @@ const el = {
   dayClockLabel: document.querySelector("#day-clock-label"),
   dayClockValue: document.querySelector("#day-clock-value"),
   dayClockBar: document.querySelector("#day-clock-bar"),
+  discussionSkipPanel: document.querySelector("#discussion-skip-panel"),
+  discussionSkipStatus: document.querySelector("#discussion-skip-status"),
+  discussionSkipButton: document.querySelector("#discussion-skip-button"),
   chatForm: document.querySelector("#chat-form"),
   chatInput: document.querySelector("#chat-input"),
   chatSubmit: document.querySelector("#chat-submit"),
@@ -189,6 +195,7 @@ const serverErrorMessages = {
   EmptyChat: "Tin nhắn không được để trống.",
   ChatTooLong: "Tin nhắn không được dài quá 300 ký tự.",
   NotReady: "Bạn chưa ở trạng thái sẵn sàng.",
+  AlreadySkippedDiscussion: "Bạn đã đồng ý bỏ qua lượt thảo luận này.",
   DuplicateRequest: "Yêu cầu này đã được xử lý trước đó.",
   InvalidAppearance: "Ngoại hình đã chọn không hợp lệ.",
   ROOM_NOT_FOUND: "Không tìm thấy phòng.",
@@ -502,7 +509,8 @@ function canChooseTarget() {
 }
 
 function renderVoting() {
-  const active = state.selfPlayerId !== null && voting.phase !== "Lobby";
+  // Không dựng form bỏ phiếu trong Night/Day: chỉ Server được quyền mở Voting.
+  const active = state.selfPlayerId !== null && state.phase === "Voting" && voting.phase === "Voting";
   voteEl["voting-section"].hidden = !active;
   renderVoteClock();
   el.readyButton.hidden = active;
@@ -609,6 +617,9 @@ function resetNightState() {
   chatBubbleTimers.clear();
   state.chatDay = null;
   state.chatChannel = "PublicDay";
+  state.discussionSkipsSubmitted = 0;
+  state.discussionSkipsTotal = 0;
+  state.hasSkippedDiscussion = false;
 }
 
 function resetRoomState() {
@@ -936,6 +947,16 @@ function renderDay() {
   el.chatHeading.textContent = `${state.chatChannel === "WolvesNight" ? "Chat Sói · Đêm" : "Chat chung · Ngày"} ${currentDay}`;
   renderDayClock();
 
+  const canSkipDiscussion = state.phase === "Day" && getSelfPlayer()?.alive === true;
+  el.discussionSkipPanel.hidden = state.phase !== "Day";
+  el.discussionSkipStatus.textContent =
+    `${state.discussionSkipsSubmitted}/${state.discussionSkipsTotal} người còn sống đã đồng ý.`;
+  el.discussionSkipButton.disabled = !state.connected || state.pending !== null ||
+    !canSkipDiscussion || state.hasSkippedDiscussion;
+  el.discussionSkipButton.textContent = state.hasSkippedDiscussion
+    ? "Đã đồng ý · Chờ người còn lại"
+    : "Đồng ý chuyển sang bỏ phiếu";
+
   el.chatMessages.replaceChildren();
   const marker = document.createElement("div");
   marker.className = "chat-day-marker";
@@ -1112,6 +1133,17 @@ function handlePhaseChanged(phase) {
   state.phase = phase;
   voting.phase = phase;
 
+  if (phase === "Day" && previousPhase !== "Day") {
+    state.discussionSkipsSubmitted = 0;
+    state.discussionSkipsTotal = state.players.filter(player => player.alive).length;
+    state.hasSkippedDiscussion = false;
+  }
+  if (phase !== "Day") {
+    state.discussionSkipsSubmitted = 0;
+    state.discussionSkipsTotal = 0;
+    state.hasSkippedDiscussion = false;
+  }
+
   // PhaseChanged Night xac nhan StartGame da thanh cong.
   if (
     phase === "Night" &&
@@ -1215,6 +1247,14 @@ function handleServerMessage(message) {
       if (message.phase === "Voting" && !voting.resolved) {
         startVoteClock(message.day, message.remainingMs);
       }
+      break;
+
+    case "DiscussionSkipState":
+      state.discussionSkipsSubmitted = Number.isInteger(message.submitted)
+        ? message.submitted : 0;
+      state.discussionSkipsTotal = Number.isInteger(message.total)
+        ? message.total : 0;
+      state.hasSkippedDiscussion = message.hasSkipped === true;
       break;
 
     case "PrivateActionState":
@@ -1719,6 +1759,13 @@ el.chatForm.addEventListener("submit", event => {
   if (correctPhase && (state.chatDay ?? voting.day) === voting.day &&
       getSelfPlayer()?.alive === true && message) {
     sendCommand("Chat", { channel: state.chatChannel, message });
+  }
+});
+
+el.discussionSkipButton.addEventListener("click", () => {
+  if (state.phase === "Day" && getSelfPlayer()?.alive === true &&
+      !state.hasSkippedDiscussion) {
+    sendCommand("SkipDiscussion");
   }
 });
 

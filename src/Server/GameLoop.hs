@@ -102,6 +102,8 @@ actorMatches request =
       pid == queuedActorId request
     ChatInChannel pid _ _ ->
       pid == queuedActorId request
+    SkipDiscussion pid ->
+      pid == queuedActorId request
 
     -- Khong cho phep client tu goi lenh noi bo.
     _ ->
@@ -273,6 +275,7 @@ dispatchPlayerCommand state command =
     ResolveHunter _ _ -> applyCommand state command
     Chat _ _ -> applyCommand state command
     ChatInChannel _ _ _ -> applyCommand state command
+    SkipDiscussion _ -> applyCommand state command
 
     -- Browser khong duoc goi command noi bo.
     _ ->
@@ -296,6 +299,7 @@ processPlayerCommand room = do
         ResolveHunter _ _ -> True
         Chat _ _ -> True
         ChatInChannel _ _ _ -> True
+        SkipDiscussion _ -> True
         _ -> False
       result =
         if tracked && key `elem` accepted then Left DuplicateRequest

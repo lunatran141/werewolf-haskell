@@ -56,6 +56,7 @@ data ClientMessage
   | ClientHunterAction RequestId RoomId NightChoice
   | ClientChat RequestId RoomId String
   | ClientChannelChat RequestId RoomId ChatChannel String
+  | ClientSkipDiscussion RequestId RoomId
   | ClientReconnect RequestId RoomId String
   deriving (Eq, Show)
 
@@ -136,6 +137,7 @@ data ServerMessage
   | MsgVotingSnapshot RoomId Phase Int [VotingPlayerView] Bool Bool Bool (Maybe GameResult)
   -- Thời gian còn lại do Server cấp; client không tự gia hạn khi reconnect.
   | MsgPhaseTimeRemaining RoomId Phase Int Integer
+  | MsgDiscussionSkipState RoomId Int Int Bool
   -- Snapshot rieng cho chinh actor; khong dua vao Lobby/Voting snapshot cong khai.
   | MsgPrivateActionState RoomId Bool (Maybe Bool) (Maybe Bool) (Maybe String)
   | MsgChatMessage RoomId String String
@@ -344,6 +346,9 @@ instance FromJSON ClientMessage where
             Just "WolvesNight" -> pure (ClientChannelChat requestId roomId WolvesNight messageText)
             Just _ -> fail "Kenh chat khong hop le."
 
+      "SkipDiscussion" ->
+        pure (ClientSkipDiscussion requestId roomId)
+
       "Reconnect" ->
         ClientReconnect requestId roomId <$> obj .: "sessionToken"
 
@@ -453,6 +458,13 @@ instance ToJSON ClientMessage where
           , "roomId" .= roomId
           , "channel" .= show channel
           , "message" .= messageText
+          ]
+
+      ClientSkipDiscussion requestId roomId ->
+        object
+          [ "type" .= ("SkipDiscussion" :: String)
+          , "requestId" .= requestId
+          , "roomId" .= roomId
           ]
 
       ClientReconnect requestId roomId sessionToken ->
@@ -650,6 +662,13 @@ instance FromJSON ServerMessage where
           <*> pure phase
           <*> obj .: "day"
           <*> obj .: "remainingMs"
+
+      "DiscussionSkipState" ->
+        MsgDiscussionSkipState
+          <$> obj .: "roomId"
+          <*> obj .: "submitted"
+          <*> obj .: "total"
+          <*> obj .: "hasSkipped"
 
       "PrivateActionState" ->
         MsgPrivateActionState
@@ -929,6 +948,15 @@ instance ToJSON ServerMessage where
           , "phase" .= show phase
           , "day" .= day
           , "remainingMs" .= remainingMs
+          ]
+
+      MsgDiscussionSkipState roomId submitted total hasSkipped ->
+        object
+          [ "type" .= ("DiscussionSkipState" :: String)
+          , "roomId" .= roomId
+          , "submitted" .= submitted
+          , "total" .= total
+          , "hasSkipped" .= hasSkipped
           ]
 
       MsgPrivateActionState roomId submitted healReady poisonReady lastProtected ->

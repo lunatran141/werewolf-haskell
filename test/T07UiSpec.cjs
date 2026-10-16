@@ -218,6 +218,42 @@ test('Server đồng bộ thời gian Day/Voting và đồng hồ Day ẩn khi s
   assert.equal(get('vote-clock-value').textContent, '00:30');
 });
 
+test('Chỉ hiển thị bảng Voting sau khi Server chuyển đúng sang Voting', () => {
+  const {get, message, players} = setup('Seer');
+  assert.equal(get('voting-section').hidden, true, 'Day chỉ hiện phần thảo luận');
+
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 1,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  assert.equal(get('voting-section').hidden, true, 'Night phải chờ các vai hành động');
+
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Voting', day: 1,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  assert.equal(get('voting-section').hidden, false);
+});
+
+test('Nút bỏ qua thảo luận chờ đủ người sống rồi Server mới mở Voting', () => {
+  const {get, message, connection, players} = setup();
+  message({type: 'DiscussionSkipState', roomId: 'R', submitted: 0,
+    total: 2, hasSkipped: false});
+  assert.equal(get('discussion-skip-panel').hidden, false);
+  assert.match(get('discussion-skip-status').textContent, /0\/2/);
+
+  get('discussion-skip-button').fire('click');
+  assert.equal(connection.sent.at(-1).type, 'SkipDiscussion');
+
+  message({type: 'ActionAccepted', roomId: 'R',
+    requestId: connection.sent.at(-1).requestId});
+  message({type: 'DiscussionSkipState', roomId: 'R', submitted: 1,
+    total: 2, hasSkipped: true});
+  assert.equal(get('discussion-skip-button').disabled, true);
+  assert.match(get('discussion-skip-button').textContent, /Chờ người còn lại/);
+
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Voting', day: 1,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  assert.equal(get('discussion-skip-panel').hidden, true);
+  assert.equal(get('voting-section').hidden, false);
+});
+
 test('Phù Thủy chờ Sói chốt phiếu rồi mới được cứu, dùng độc hoặc bỏ lượt', () => {
   const {get, message, connection, players} = setup('Witch');
   message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 1,

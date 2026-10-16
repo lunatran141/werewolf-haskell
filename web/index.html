@@ -9,9 +9,9 @@
     href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
     rel="stylesheet"
   >
-  <link rel="stylesheet" href="style.css?ui=20261015a">
+  <link rel="stylesheet" href="style.css?ui=20261016d">
   <script src="avatar.js?ui=20261014b" defer></script>
-  <script src="app.js?ui=20261015a" defer></script>
+  <script src="app.js?ui=20261016d" defer></script>
 </head>
 <body>
   <div id="twinkling-stars" class="twinkling-stars" aria-hidden="true"></div>
@@ -621,6 +621,16 @@
             <span id="day-clock-label" class="day-clock-label">Thời gian thảo luận</span>
             <strong id="day-clock-value">03:00</strong>
             <div class="day-clock-track"><span id="day-clock-bar"></span></div>
+          </div>
+          <div id="discussion-skip-panel" class="discussion-skip-panel" hidden>
+            <div>
+              <strong>Bỏ qua thời gian thảo luận</strong>
+              <p id="discussion-skip-status">0/0 người còn sống đã đồng ý.</p>
+            </div>
+            <button id="discussion-skip-button" class="btn leave-button"
+              type="button">
+              Đồng ý chuyển sang bỏ phiếu
+            </button>
           </div>
           <div class="chat-tabs" role="group" aria-label="Kênh trò chuyện">
             <button id="chat-public-tab" type="button" aria-pressed="true">Chat chung</button>
