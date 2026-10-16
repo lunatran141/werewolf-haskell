@@ -149,6 +149,27 @@ test('Dashboard dùng appearance của Server cho mọi người chơi', () => {
   assert.match(secondAvatar.innerHTML, /#064E3B/i);
 });
 
+test('Create/Join gửi ngoại hình đã chọn tới Server', () => {
+  const {get, connection} = setup();
+  get('room-id').value = 'ROOM-AVATAR';
+  get('player-name').value = 'Người chơi mới';
+  get('appearance-hair').value = 'ponytail';
+  get('appearance-hair-color').value = '#EC4899';
+  get('appearance-skin').value = '#C28865';
+  get('appearance-outfit').value = '#064E3B';
+  get('appearance-accessory').value = 'flower_crown';
+
+  get('join-form').fire('submit');
+
+  const command = connection.sent.at(-1);
+  assert.equal(command.type, 'JoinGame');
+  assert.equal(command.roomId, 'ROOM-AVATAR');
+  assert.deepEqual(command.appearance, {
+    hair: 'ponytail', hairColor: '#EC4899', skin: '#C28865',
+    outfit: '#064E3B', accessory: 'flower_crown'
+  });
+});
+
 test('Có thể chọn mục tiêu Voting trực tiếp bằng ô người chơi', () => {
   const {get, message, players} = setup();
   message({type: 'VotingSnapshot', roomId: 'R', phase: 'Voting', day: 1,
