@@ -28,9 +28,9 @@ jobs:
       - name: Update package index
         run: cabal update
       - name: Build all components
-        run: cabal build all
+        run: cabal build all --enable-tests
       - name: Run all tests
-        run: cabal test all
+        run: cabal test all --enable-tests --test-show-details=direct
 
   docker:
     runs-on: ubuntu-latest
