@@ -244,7 +244,14 @@ lobbyStartTests =
       gameDay endedState `shouldBe` 1
       gameNightResolved endedState `shouldBe` False
       events `shouldBe`
-        [PhaseChanged GameOver, GameFinished Draw]
+        [ PhaseChanged GameOver
+        , GameFinished Draw
+        , GameRolesRevealed
+            [ (playerId p, role)
+            | p <- gamePlayers endedState
+            , Just role <- [playerRole p]
+            ]
+        ]
       validateGameInvariant endedState `shouldBe` Right ()
 
     it "Khong chuyen pha khi con role reveal dang cho" $ do

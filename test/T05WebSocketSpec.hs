@@ -12,6 +12,7 @@ import Control.Concurrent.STM
   ( atomically
   , readTVar
   , writeTChan
+  , writeTVar
   )
 
 import Control.Monad (void)
@@ -20,9 +21,15 @@ import Data.Aeson (eitherDecode, encode)
 import qualified Data.ByteString.Lazy as BL
 
 import Domain.Types
-  ( DomainEvent(..)
+  ( Appearance(..)
+  , defaultAppearance
+  , DomainEvent(..)
+  , GameState(..)
   , NightChoice(..)
+  , LifeStatus(..)
   , Phase(..)
+  , Player(..)
+  , Role(..)
   , Team(..)
   )
 
@@ -54,13 +61,23 @@ import Test.Hspec
   , hspec
   , it
   , shouldBe
+  , shouldSatisfy
   )
-
 
 -- Cong WebSocket danh rieng cho test.
 serverPort :: Int
 serverPort = 18765
 
+-- Appearance tuy chinh hop le theo preset T07.
+customAppearance :: Appearance
+customAppearance =
+  Appearance
+    { appearanceHair = "ponytail"
+    , appearanceHairColor = "#8B5CF6"
+    , appearanceSkin = "#C28865"
+    , appearanceOutfit = "#064E3B"
+    , appearanceAccessory = "flower_crown"
+    }
 
 -- Gioi han thoi gian cho tung bai test.
 withTestTimeout :: IO () -> IO ()
@@ -74,7 +91,6 @@ withTestTimeout action = do
 
     Just () ->
       pure ()
-
 
 -- Gui ClientMessage duoi dang JSON.
 sendMessage :: WS.Connection -> ClientMessage -> IO ()
@@ -104,6 +120,14 @@ receiveMessage connection = do
             ("Khong doc duoc ServerMessage: " ++ err)
           fail err
 
+receiveUntil :: WS.Connection -> (ServerMessage -> Bool) -> IO ServerMessage
+receiveUntil connection predicate = do
+  message <- receiveMessage connection
+  if predicate message then pure message else receiveUntil connection predicate
+
+isLobbySnapshot :: ServerMessage -> Bool
+isLobbySnapshot MsgLobbySnapshot {} = True
+isLobbySnapshot _ = False
 
 -- Tao phong va lay PlayerId do Server cap.
 createRoom :: WS.Connection -> String -> IO String
@@ -111,7 +135,7 @@ createRoom connection rid = do
   sendMessage connection
     (ClientCreateRoom "create" rid "SeerPlayer")
 
-  response <- receiveMessage connection
+  response <- receiveUntil connection isLobbySnapshot
 
   case response of
     MsgLobbySnapshot actualRoom selfId _ _ -> do
@@ -123,14 +147,13 @@ createRoom connection rid = do
         "CreateRoom khong tra LobbySnapshot."
       fail "CreateRoom failed"
 
-
 -- Tham gia phong va lay PlayerId do Server cap.
 joinRoom :: WS.Connection -> String -> IO String
 joinRoom connection rid = do
   sendMessage connection
     (ClientJoin "join" rid "OtherPlayer")
 
-  response <- receiveMessage connection
+  response <- receiveUntil connection isLobbySnapshot
 
   case response of
     MsgLobbySnapshot actualRoom selfId _ _ -> do
@@ -142,8 +165,7 @@ joinRoom connection rid = do
         "JoinGame khong tra LobbySnapshot."
       fail "JoinGame failed"
 
-
--- Kiem tra thong diep tu choi.
+-- Kiem tra thong diep tu choi theo requestId va code.
 expectRejected
   :: WS.Connection
   -> String
@@ -160,7 +182,6 @@ expectRejected connection requestId expectedCode = do
     _ ->
       expectationFailure
         "Server khong tra CommandRejected."
-
 
 -- Khoi dong WebSocket Server cho bo test.
 -- Server chay trong thread phu.
@@ -184,7 +205,6 @@ startTestServer = do
 
   pure registry
 
-
 -- Lay RoomRuntime cua phong dang test.
 requireRoom :: RoomRegistry -> String -> IO RoomRuntime
 requireRoom registry rid = do
@@ -199,7 +219,6 @@ requireRoom registry rid = do
         ("Khong tim thay RoomRuntime: " ++ rid)
       fail "Room not found"
 
-
 -- Phat DomainEvent thu nghiem vao channel cua phong.
 -- Chi test fixture moi duoc thao tac truc tiep.
 publishTestEvents :: RoomRuntime -> [DomainEvent] -> IO ()
@@ -213,14 +232,192 @@ publishTestEvents room events =
         { updateVersion = currentVersion
         , updateState = currentState
         , updateEvents = events
+        , updateChatRecord = Nothing
         }
 
+-- Lay PlayerView theo ID tu danh sach cong khai.
+requirePlayerView :: String -> [PlayerView] -> IO PlayerView
+requirePlayerView pid players =
+  case filter ((== pid) . viewPlayerId) players of
+    [playerView] ->
+      pure playerView
+
+    _ -> do
+      expectationFailure
+        ("Khong tim thay PlayerView duy nhat: " ++ pid)
+      fail "PlayerView not found"
+
+-- Lay Player theo ID tu GameState.
+requireDomainPlayer :: String -> GameState -> IO Player
+requireDomainPlayer pid state =
+  case filter ((== pid) . playerId) (gamePlayers state) of
+    [player] ->
+      pure player
+
+    _ -> do
+      expectationFailure
+        ("Khong tim thay Player duy nhat: " ++ pid)
+      fail "Domain Player not found"
 
 main :: IO ()
 main = do
   registry <- startTestServer
 
   hspec $ do
+
+    describe "T07 - WebSocket reconnect" $ do
+      it "giu nguyen PlayerId va snapshot khi noi lai bang token" $
+        withTestTimeout $ do
+          (originalPlayerId, sessionToken) <-
+            WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+              sendMessage connection
+                (ClientCreateRoom "reconnect-create" "ROOM-R01" "ReconnectPlayer")
+              established <- receiveUntil connection $ \message ->
+                case message of
+                  MsgSessionEstablished "ROOM-R01" _ _ -> True
+                  _ -> False
+              case established of
+                MsgSessionEstablished _ playerId token -> pure (playerId, token)
+                _ -> fail "Khong nhan duoc session token"
+
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect "reconnect" "ROOM-R01" sessionToken)
+            established <- receiveUntil connection $ \message ->
+              case message of
+                MsgSessionEstablished "ROOM-R01" _ _ -> True
+                _ -> False
+            established `shouldBe`
+              MsgSessionEstablished "ROOM-R01" originalPlayerId sessionToken
+
+            snapshot <- receiveUntil connection isLobbySnapshot
+            case snapshot of
+              MsgLobbySnapshot _ selfId _ players -> do
+                selfId `shouldBe` originalPlayerId
+                length players `shouldBe` 1
+              _ -> fail "Khong nhan duoc LobbySnapshot sau reconnect"
+
+      it "reconnect giua Day nhan dung thoi gian con lai, khong reset 3 phut" $
+        withTestTimeout $ do
+          (sessionToken, firstRemaining) <-
+            WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+              sendMessage connection
+                (ClientCreateRoom "timer-create" "ROOM-R02" "TimerPlayer")
+              established <- receiveUntil connection $ \message ->
+                case message of
+                  MsgSessionEstablished "ROOM-R02" _ _ -> True
+                  _ -> False
+              token <- case established of
+                MsgSessionEstablished _ _ value -> pure value
+                _ -> fail "Khong nhan duoc session token"
+
+              room <- requireRoom registry "ROOM-R02"
+              atomically $ do
+                state <- readTVar (roomState room)
+                writeTVar (roomState room) state {gamePhase = Day, gameDay = 1}
+
+              deadlineMessage <- receiveUntil connection $ \message ->
+                case message of
+                  MsgPhaseTimeRemaining "ROOM-R02" Day 1 _ -> True
+                  _ -> False
+              remaining <- case deadlineMessage of
+                MsgPhaseTimeRemaining _ _ _ value -> pure value
+                _ -> fail "Khong nhan duoc thoi gian Day"
+              pure (token, remaining)
+
+          threadDelay 250000
+
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect "timer-reconnect" "ROOM-R02" sessionToken)
+            deadlineMessage <- receiveUntil connection $ \message ->
+              case message of
+                MsgPhaseTimeRemaining "ROOM-R02" Day 1 _ -> True
+                _ -> False
+            case deadlineMessage of
+              MsgPhaseTimeRemaining _ _ _ remaining -> do
+                remaining `shouldSatisfy` (> 0)
+                remaining `shouldSatisfy` (< firstRemaining)
+              _ -> fail "Reconnect khong nhan duoc thoi gian Day"
+
+      it "reconnect khoi phuc action da gui va trang thai thuoc rieng" $
+        withTestTimeout $ do
+          (actor, sessionToken) <-
+            WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+              sendMessage connection
+                (ClientCreateRoom "private-create" "ROOM-R03" "WitchPlayer")
+              established <- receiveUntil connection $ \message ->
+                case message of
+                  MsgSessionEstablished "ROOM-R03" _ _ -> True
+                  _ -> False
+              case established of
+                MsgSessionEstablished _ playerId token -> pure (playerId, token)
+                _ -> fail "Khong nhan duoc session token"
+
+          room <- requireRoom registry "ROOM-R03"
+          atomically $ do
+            state <- readTVar (roomState room)
+            let players =
+                  [ player {playerRole = Just Witch}
+                  | player <- gamePlayers state
+                  ]
+            writeTVar (roomState room) state
+              { gamePlayers = players
+              , gamePhase = Night
+              , gameDay = 1
+              , gameNightActions = [(actor, WitchPass)]
+              , gameWitchHealReady = False
+              , gameWitchPoisonReady = True
+              }
+
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect "private-reconnect" "ROOM-R03" sessionToken)
+            privateState <- receiveUntil connection $ \message ->
+              case message of
+                MsgPrivateActionState "ROOM-R03" _ _ _ _ -> True
+                _ -> False
+            privateState `shouldBe`
+              MsgPrivateActionState "ROOM-R03" True (Just False) (Just True) Nothing
+
+      it "danh sach dong doi Soi chi duoc phuc hoi cho ket noi Soi" $
+        withTestTimeout $ do
+          (actor, sessionToken) <-
+            WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+              sendMessage connection
+                (ClientCreateRoom "wolf-team-create" "ROOM-R04" "WolfPlayer")
+              established <- receiveUntil connection $ \message ->
+                case message of
+                  MsgSessionEstablished "ROOM-R04" _ _ -> True
+                  _ -> False
+              case established of
+                MsgSessionEstablished _ playerId token -> pure (playerId, token)
+                _ -> fail "Khong nhan duoc session token"
+
+          room <- requireRoom registry "ROOM-R04"
+          atomically $ do
+            state <- readTVar (roomState room)
+            let actorPlayers =
+                  [ player {playerRole = Just Werewolf}
+                  | player <- gamePlayers state
+                  ]
+                teammate = Player "wolf-2" "Wolf Two" (Just Werewolf) False Alive defaultAppearance
+            writeTVar (roomState room) state
+              { gamePlayers = actorPlayers ++ [teammate]
+              , gamePhase = Night
+              , gameDay = 1
+              }
+
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect "wolf-team-reconnect" "ROOM-R04" sessionToken)
+            team <- receiveUntil connection $ \message ->
+              case message of
+                MsgWolfTeam "ROOM-R04" _ -> True
+                _ -> False
+            team `shouldBe` MsgWolfTeam "ROOM-R04" [actor, "wolf-2"]
+
+    -- Giu nguyen cac test T05 WebSocket.
     describe "T05 - WebSocket NightAction" $ do
 
       it "W01 - Tu choi NightAction khi chua Join" $
@@ -237,7 +434,6 @@ main = do
                   (WolfTarget "p7"))
 
               expectRejected connection "w01" "NOT_JOINED"
-
 
       it "W02 - Tu choi NightAction gui sai RoomId" $
         withTestTimeout $
@@ -256,7 +452,6 @@ main = do
 
               expectRejected connection "w02" "WRONG_ROOM"
 
-
       it "W03 - Tu choi NightAction khi dang Lobby" $
         withTestTimeout $
           WS.runClient
@@ -273,7 +468,6 @@ main = do
                   (WolfTarget "p7"))
 
               expectRejected connection "w03" "WrongPhase"
-
 
       it "W04 - SeerResult chi gui den dung WebSocket" $
         withTestTimeout $
@@ -302,7 +496,9 @@ main = do
                       (PlayerView
                         otherId
                         "OtherPlayer"
-                        False)
+                        False
+                        True
+                        defaultAppearance)
 
                   room <- requireRoom registry "ROOM-W04"
 
@@ -326,8 +522,174 @@ main = do
                     MsgPhaseChanged "ROOM-W04" Day
 
                   -- Client khac chi nhan event public.
-                  -- Neu bi ro ri SeerResult, test se that bai.
                   otherPublic <- receiveMessage otherConnection
 
                   otherPublic `shouldBe`
                     MsgPhaseChanged "ROOM-W04" Day
+
+    -- Test moi cua T02: Appearance qua WebSocket thuc te.
+    describe "T02 - WebSocket Appearance" $ do
+
+      it "A01 - Host tao phong voi Appearance tuy chinh" $
+        withTestTimeout $
+          WS.runClient
+            "127.0.0.1"
+            serverPort
+            "/" $ \connection -> do
+
+              sendMessage connection
+                (ClientCreateRoomWithAppearance
+                  "a01"
+                  "ROOM-A01"
+                  "HostVan"
+                  customAppearance)
+
+              response <- receiveUntil connection isLobbySnapshot
+
+              case response of
+                MsgLobbySnapshot rid selfId hostId players -> do
+                  rid `shouldBe` "ROOM-A01"
+                  hostId `shouldBe` selfId
+                  length players `shouldBe` 1
+
+                  publicPlayer <-
+                    requirePlayerView selfId players
+
+                  viewDisplayName publicPlayer
+                    `shouldBe` "HostVan"
+
+                  viewAlive publicPlayer
+                    `shouldBe` True
+
+                  viewAppearance publicPlayer
+                    `shouldBe` customAppearance
+
+                  -- Kiem tra Appearance thuc su duoc luu.
+                  room <- requireRoom registry "ROOM-A01"
+                  state <- atomically (readTVar (roomState room))
+
+                  domainPlayer <-
+                    requireDomainPlayer selfId state
+
+                  playerAppearance domainPlayer
+                    `shouldBe` customAppearance
+
+                _ -> do
+                  expectationFailure
+                    "CreateRoom co Appearance khong tra LobbySnapshot."
+
+      it "A02 - Join voi Appearance va Host nhan PlayerJoined" $
+        withTestTimeout $
+          WS.runClient
+            "127.0.0.1"
+            serverPort
+            "/" $ \hostConnection -> do
+
+              hostId <-
+                createRoom hostConnection "ROOM-A02"
+
+              WS.runClient
+                "127.0.0.1"
+                serverPort
+                "/" $ \joinConnection -> do
+
+                  sendMessage joinConnection
+                    (ClientJoinWithAppearance
+                      "a02"
+                      "ROOM-A02"
+                      "JoinBinh"
+                      customAppearance)
+
+                  response <- receiveUntil joinConnection isLobbySnapshot
+
+                  case response of
+                    MsgLobbySnapshot rid joinId actualHostId players -> do
+                      rid `shouldBe` "ROOM-A02"
+                      actualHostId `shouldBe` hostId
+                      length players `shouldBe` 2
+
+                      -- Host giu Appearance mac dinh.
+                      hostView <-
+                        requirePlayerView hostId players
+
+                      viewAppearance hostView
+                        `shouldBe` defaultAppearance
+
+                      -- Nguoi Join co Appearance tuy chinh.
+                      joinView <-
+                        requirePlayerView joinId players
+
+                      viewDisplayName joinView
+                        `shouldBe` "JoinBinh"
+
+                      viewAlive joinView
+                        `shouldBe` True
+
+                      viewAppearance joinView
+                        `shouldBe` customAppearance
+
+                      -- Host cung phai nhan dung Appearance.
+                      hostEvent <- receiveMessage hostConnection
+
+                      hostEvent `shouldBe`
+                        MsgPlayerJoined
+                          "ROOM-A02"
+                          (PlayerView
+                            joinId
+                            "JoinBinh"
+                            False
+                            True
+                            customAppearance)
+
+                      -- Kiem tra GameState phia Server.
+                      room <- requireRoom registry "ROOM-A02"
+                      state <- atomically (readTVar (roomState room))
+
+                      domainPlayer <-
+                        requireDomainPlayer joinId state
+
+                      playerAppearance domainPlayer
+                        `shouldBe` customAppearance
+
+                    _ -> do
+                      expectationFailure
+                        "JoinGame co Appearance khong tra LobbySnapshot."
+
+      it "A03 - Appearance khong hop le khong tao duoc phong" $
+        withTestTimeout $
+          WS.runClient
+            "127.0.0.1"
+            serverPort
+            "/" $ \connection -> do
+
+              let invalidAppearance =
+                    defaultAppearance
+                      { appearanceHair = "unknown" }
+
+              sendMessage connection
+                (ClientCreateRoomWithAppearance
+                  "a03"
+                  "ROOM-A03"
+                  "InvalidHost"
+                  invalidAppearance)
+
+              response <- receiveMessage connection
+
+              case response of
+                MsgRejected actualRequestId _ _ ->
+                  actualRequestId `shouldBe` Just "a03"
+
+                _ ->
+                  expectationFailure
+                    "Server khong tu choi Appearance khong hop le."
+
+              -- Phong khong duoc cong bo neu Host Join that bai.
+              found <- findRoom registry "ROOM-A03"
+
+              case found of
+                Nothing ->
+                  pure ()
+
+                Just _ ->
+                  expectationFailure
+                    "Phong van duoc tao du Appearance khong hop le."

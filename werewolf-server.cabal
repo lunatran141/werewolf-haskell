@@ -221,3 +221,17 @@ test-suite t06-websocket-test
     , bytestring >=0.11
     , stm >=2.5 && <3
     , websockets >=0.12 && <0.14
+
+-- T07: Unit test cho điều kiện thắng, thua và hòa.
+test-suite t07-win-test
+  type: exitcode-stdio-1.0
+  main-is: T07WinSpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , werewolf-server
+    , hspec >=2.10
+    , aeson >=2.1 && <2.3
+    , stm >=2.5 && <3

@@ -2,12 +2,12 @@ FROM haskell:9.6.6-slim AS build
 
 WORKDIR /src
 COPY cabal.project werewolf-server.cabal ./
-RUN cabal update && cabal build --only-dependencies
+RUN cabal update && cabal build --only-dependencies --enable-tests
 COPY app ./app
 COPY src ./src
 COPY test ./test
-RUN cabal build all \
-    && cabal test all \
+RUN cabal build all --enable-tests \
+    && cabal test all --enable-tests --test-show-details=direct \
     && mkdir -p /out \
     && cp "$(cabal list-bin exe:werewolf-server)" /out/werewolf-server
 

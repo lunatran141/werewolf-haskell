@@ -4,9 +4,11 @@ module Server.GameLoop
   ( processNextLobbyCommand
   , runLobbyLoop
   , runGameLoopWithTimeouts
+  , runGameLoopWithPhaseTimeouts
   , applyInternalCommand
   , CreateRoomError(..)
   , createRoomWithHost
+  , createRoomWithHostAppearance
   ) where
 
 import Control.Concurrent.MVar (modifyMVar)
@@ -25,6 +27,7 @@ import Control.Concurrent.STM
   )
 
 import Data.Char (isSpace)
+import GHC.Clock (getMonotonicTimeNSec)
 
 import Domain.Engine
   ( applyCommand
@@ -39,8 +42,10 @@ import Domain.Engine
 import Domain.Night (wolfVotingComplete)
 
 import Domain.Types
-  ( Command(..)
-  , DomainEvent
+  ( ChatChannel(..)
+  , ChatRecord(..)
+  , Command(..)
+  , DomainEvent(..)
   , GameError(..)
   , GameState(..)
   , LifeStatus(..)
@@ -49,6 +54,7 @@ import Domain.Types
   , Player(..)
   , PlayerId
   , Role(..)
+  , Appearance
   )
 
 import Protocol.Types (RequestId, RoomId)
@@ -68,7 +74,9 @@ actorMatches request =
   case queuedCommand request of
     Join pid _ ->
       pid == queuedActorId request
-
+    -- Kiem tra PlayerId cua lenh Join co Appearance.
+    JoinWithAppearance pid _ _ ->
+      pid == queuedActorId request
     Leave pid ->
       pid == queuedActorId request
 
@@ -91,6 +99,8 @@ actorMatches request =
     -- Chat thuộc người chơi; ResolveVoting vẫn chỉ do bộ đếm giờ nội bộ gọi.
     -- HunterAction được Handler đổi thành ResolveHunter với ID của session.
     Chat pid _ ->
+      pid == queuedActorId request
+    ChatInChannel pid _ _ ->
       pid == queuedActorId request
 
     -- Khong cho phep client tu goi lenh noi bo.
@@ -249,7 +259,9 @@ dispatchPlayerCommand state command =
     -- Lobby.
     Join _ _ ->
       applyLobbyCommand state command
-
+    -- Xu ly Join voi ngoai hinh da duoc validate.
+    JoinWithAppearance _ _ _ ->
+      applyLobbyCommand state command
     Leave _ ->
       applyLobbyCommand state command
 
@@ -260,6 +272,7 @@ dispatchPlayerCommand state command =
     Vote _ _ -> applyCommand state command
     ResolveHunter _ _ -> applyCommand state command
     Chat _ _ -> applyCommand state command
+    ChatInChannel _ _ _ -> applyCommand state command
 
     -- Browser khong duoc goi command noi bo.
     _ ->
@@ -281,6 +294,8 @@ processPlayerCommand room = do
       tracked = case queuedCommand request of
         Vote _ _ -> True
         ResolveHunter _ _ -> True
+        Chat _ _ -> True
+        ChatInChannel _ _ _ -> True
         _ -> False
       result =
         if tracked && key `elem` accepted then Left DuplicateRequest
@@ -295,6 +310,7 @@ processPlayerCommand room = do
 
     Right (nextState, events) -> do
       if tracked then writeTVar (roomAcceptedRequests room) (key : accepted) else pure ()
+      storedChat <- appendAcceptedChat room nextState events
       currentVersion <- readTVar (roomVersion room)
 
       let nextVersion = currentVersion + 1
@@ -308,14 +324,47 @@ processPlayerCommand room = do
           { updateVersion = nextVersion
           , updateState = nextState
           , updateEvents = events
+          , updateChatRecord = storedChat
           }
 
       putTMVar (queuedReply request) (Right nextState)
 
+-- T07: Lưu đúng nội dung đã được Engine chuẩn hóa. Việc tăng sequence và
+-- append history nằm trong cùng STM với commit state/event của phòng.
+appendAcceptedChat :: RoomRuntime -> GameState -> [DomainEvent] -> STM (Maybe ChatRecord)
+appendAcceptedChat room state events =
+  case chatPayload events of
+    Nothing -> pure Nothing
+    Just (channel, senderId, messageText) -> do
+      sequenceNumber <- readTVar (roomNextChatSequence room)
+      history <- readTVar (roomChatHistory room)
+      let messageId = roomId room ++ "-chat-" ++ show sequenceNumber
+          record = ChatRecord
+            { chatRoomId = roomId room
+            , chatDay = gameDay state
+            , chatChannel = channel
+            , chatMessageId = messageId
+            , chatSequence = sequenceNumber
+            , chatSenderId = senderId
+            , chatText = messageText
+            }
+      writeTVar (roomChatHistory room) (history ++ [record])
+      writeTVar (roomNextChatSequence room) (sequenceNumber + 1)
+      pure (Just record)
+  where
+    chatPayload [] = Nothing
+    chatPayload (event : remaining) =
+      case event of
+        ChatMessage senderId messageText ->
+          Just (PublicDay, senderId, messageText)
+        ChatMessageInChannel channel senderId messageText ->
+          Just (channel, senderId, messageText)
+        _ -> chatPayload remaining
+
 -- Worker xu ly Command Queue.
 -- Dung khi nguoi cuoi cung roi phong.
 runLobbyLoop :: RoomRuntime -> IO ()
-runLobbyLoop = runGameLoopWithTimeouts 60000000 30000000
+runLobbyLoop = runGameLoopWithPhaseTimeouts 180000000 60000000 30000000
 
 -- T06: Điểm nối cho bộ điều phối T04/T05. Không được gọi từ JSON client.
 -- Cập nhật phase và phát sự kiện trong cùng STM với queue người chơi.
@@ -328,14 +377,16 @@ applyInternalCommand room command = do
       version <- readTVar (roomVersion room)
       writeTVar (roomState room) nextState
       writeTVar (roomVersion room) (version + 1)
-      writeTChan (roomUpdates room) (RoomUpdate (version + 1) nextState events)
+      writeTChan (roomUpdates room) (RoomUpdate (version + 1) nextState events Nothing)
       pure (Right nextState)
 
--- Khóa cửa sổ bằng phase/vòng/Hunter: phiếu mới không gia hạn timer.
-votingWindow :: GameState -> Maybe (Phase, Int, Maybe PlayerId)
-votingWindow state
+-- Khóa cửa sổ bằng phase/vòng/Hunter: chat và phiếu mới không gia hạn timer.
+timedWindow :: GameState -> Maybe (Phase, Int, Maybe PlayerId)
+timedWindow state
   | gamePhase state `elem` [Night, Voting], Just hunter <- gamePendingHunter state =
       Just (gamePhase state, gameDay state, Just hunter)
+  | gamePhase state == Day =
+      Just (Day, gameDay state, Nothing)
   | gamePhase state == Voting && not (gameVotingResolved state) =
       Just (Voting, gameDay state, Nothing)
   | otherwise = Nothing
@@ -343,19 +394,36 @@ votingWindow state
 -- Thời gian tính bằng microsecond, truyền vào để test nhanh mà không đổi luật.
 -- Timer và Vote tranh chấp trên cùng TVar: sau khi chốt, phiếu đến muộn bị từ chối.
 runGameLoopWithTimeouts :: Int -> Int -> RoomRuntime -> IO ()
-runGameLoopWithTimeouts voteMicros hunterMicros room = startWindow
+runGameLoopWithTimeouts = runGameLoopWithPhaseTimeouts 180000000
+
+-- Day kéo dài 3 phút ở cấu hình thật; test có thể truyền thời hạn ngắn hơn.
+runGameLoopWithPhaseTimeouts :: Int -> Int -> Int -> RoomRuntime -> IO ()
+runGameLoopWithPhaseTimeouts dayMicros voteMicros hunterMicros room = startWindow
   where
     startWindow = do
       state <- readTVarIO (roomState room)
-      let window = votingWindow state
+      let window = timedWindow state
           duration = case window of
             Just (_, _, Just _) -> hunterMicros
+            Just (Day, _, Nothing) -> dayMicros
             _ -> voteMicros
+      now <- getMonotonicTimeNSec
+      atomically $ do
+        let deadline = fmap (\(phase, day, _) ->
+              (phase, day, now + fromIntegral (max 1 duration) * 1000)) window
+        writeTVar (roomPhaseDeadline room) deadline
+        -- Phát thêm snapshot sau khi deadline đã được thiết lập. Update không có
+        -- event nên không lặp hiệu ứng game và không tăng version.
+        case window of
+          Nothing -> pure ()
+          Just _ -> do
+            version <- readTVar (roomVersion room)
+            writeTChan (roomUpdates room) (RoomUpdate version state [] Nothing)
       timer <- registerDelay (max 1 duration)
       let loop = do
             restart <- atomically $
               (do current <- readTVar (roomState room)
-                  check (votingWindow current /= window || null (gamePlayers current))
+                  check (timedWindow current /= window || null (gamePlayers current))
                   pure True)
               `orElse`
               (do check (window /= Nothing)
@@ -363,6 +431,7 @@ runGameLoopWithTimeouts voteMicros hunterMicros room = startWindow
                   check expired
                   let command = case window of
                         Just (_, _, Just hunter) -> ResolveHunter hunter Nothing
+                        Just (Day, _, Nothing) -> AdvancePhase
                         _ -> ResolveVoting
                   result <- applyInternalCommand room command
                   case result of
@@ -376,6 +445,7 @@ runGameLoopWithTimeouts voteMicros hunterMicros room = startWindow
             else loop
       loop
 
+
 -- Loi khi tao phong.
 data CreateRoomError
   = InvalidRoomId
@@ -383,8 +453,8 @@ data CreateRoomError
   | HostJoinRejected GameError
   deriving (Eq, Show)
 
--- Tao phong va Host.
--- Chi cong bo phong sau khi Host Join thanh cong.
+-- Tao phong va Host theo contract cu.
+-- Giu lai de khong anh huong T03/T06.
 createRoomWithHost
   :: RoomRegistry
   -> RoomId
@@ -393,7 +463,39 @@ createRoomWithHost
   -> String
   -> (RoomRuntime -> IO ())
   -> IO (Either CreateRoomError (RoomRuntime, GameState))
-createRoomWithHost registry rid requestId actor name startWorker
+createRoomWithHost registry rid requestId actor name startWorker =
+  createRoomWithHostCommand
+    registry rid requestId actor
+    (Join actor name)
+    startWorker
+
+-- Tao phong va Host voi Appearance do nguoi choi chon.
+createRoomWithHostAppearance
+  :: RoomRegistry
+  -> RoomId
+  -> RequestId
+  -> PlayerId
+  -> String
+  -> Appearance
+  -> (RoomRuntime -> IO ())
+  -> IO (Either CreateRoomError (RoomRuntime, GameState))
+createRoomWithHostAppearance registry rid requestId actor name appearance startWorker =
+  createRoomWithHostCommand
+    registry rid requestId actor
+    (JoinWithAppearance actor name appearance)
+    startWorker
+
+-- Tao phong bang Command da chon.
+-- Chi cong bo phong sau khi Host Join thanh cong.
+createRoomWithHostCommand
+  :: RoomRegistry
+  -> RoomId
+  -> RequestId
+  -> PlayerId
+  -> Command
+  -> (RoomRuntime -> IO ())
+  -> IO (Either CreateRoomError (RoomRuntime, GameState))
+createRoomWithHostCommand registry rid requestId actor joinCommand startWorker
   | null rid || length rid > 32 || any isSpace rid =
       pure (Left InvalidRoomId)
 
@@ -412,7 +514,7 @@ createRoomWithHost registry rid requestId actor name startWorker
                 QueuedCommand
                   { queuedRequestId = requestId
                   , queuedActorId = actor
-                  , queuedCommand = Join actor name
+                  , queuedCommand = joinCommand
                   , queuedReply = reply
                   }
 

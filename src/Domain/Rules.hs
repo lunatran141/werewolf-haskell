@@ -25,6 +25,7 @@ module Domain.Rules
   , voteWinner
   , lynchTarget
   , resolveTie
+  , countAliveTeam
   , checkWin
   , checkWinner
   , nextPhase
@@ -171,4 +172,17 @@ uniqueIds = foldl' addUnique []
     addUnique seen pid
       | pid `elem` seen = seen
       | otherwise = seen ++ [pid]
+
+-- | Đếm số người còn sống thuộc một phe.
+--
+-- Người chưa được gán vai sẽ không được tính.
+countAliveTeam :: Team -> GameState -> Int
+countAliveTeam expectedTeam state =
+  length
+    [ player
+    | player <- gamePlayers state
+    , playerLifeStatus player == Alive
+    , Just role <- [playerRole player]
+    , teamOfRole role == expectedTeam
+    ]
 

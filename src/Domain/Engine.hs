@@ -9,6 +9,7 @@ import Domain.Rules
 import Domain.Validation
   ( validateGameInvariant
   , validateJoin
+  , validateAppearance
   , validateLeave
   , validateSetReady
   , expectedRoles
@@ -16,10 +17,12 @@ import Domain.Validation
   , validateStartGame
   , validateNightAction
   , validateChat
+  , validateChatInChannel
   , validateHunterShot
   , validatePlayerAlive
   , validatePlayerExists
   , validateVote
+  , normalizePlayerName
   )
 -- Them nguoi choi vao Lobby.
 -- PlayerId do Server cap; validateJoin tao Player voi ten da chuan hoa.
@@ -37,6 +40,32 @@ joinPlayer state pid name = do
         }
   validateGameInvariant newState
   pure (newState, [PlayerJoined pid])
+
+-- Them Player vao Lobby voi ngoai hinh da chon.
+-- Giu nguyen validation Join va quy tac gan Host cua T03.
+joinPlayerWithAppearance
+  :: GameState
+  -> PlayerId
+  -> String
+  -> Appearance
+  -> Either GameError (GameState, [DomainEvent])
+joinPlayerWithAppearance state pid name appearance = do
+  validAppearance <- validateAppearance appearance
+
+  (joinedState, events) <- joinPlayer state pid name
+
+  let updatePlayer player
+        | playerId player == pid =
+            player { playerAppearance = validAppearance }
+        | otherwise = player
+
+      finalState = joinedState
+        { gamePlayers = map updatePlayer (gamePlayers joinedState) }
+
+  validateGameInvariant finalState
+
+  pure (finalState, events)
+
 -- Xoa nguoi choi khoi Lobby.
 -- Neu Host roi, nguoi con lai Join som nhat tro thanh Host.
 leavePlayer
@@ -87,17 +116,30 @@ setPlayerReady state pid ready = do
           else []
   validateGameInvariant newState
   pure (newState, events)
--- Xu ly rieng cac command thuoc Lobby.
+-- Xu ly cac command thuoc Lobby.
 applyLobbyCommand
   :: GameState
   -> Command
   -> Either GameError (GameState, [DomainEvent])
 applyLobbyCommand state command =
   case command of
-    Join pid name       -> joinPlayer state pid name
-    Leave pid           -> leavePlayer state pid
-    SetReady pid ready  -> setPlayerReady state pid ready
-    _                   -> Left InvalidCommand
+    Join pid name -> joinPlayer state pid name
+    JoinWithAppearance pid name appearance ->
+      joinPlayerWithAppearance state pid name appearance
+    Leave pid -> leavePlayer state pid
+    SetReady pid ready -> setPlayerReady state pid ready
+    _ -> Left InvalidCommand
+
+-- T07: Chat ban ngay la transition thuan tuy, khong thay doi GameState.
+applyChatCommand
+  :: GameState
+  -> Command
+  -> Either GameError (GameState, [DomainEvent])
+applyChatCommand state command =
+  case command of
+    Chat actor message -> sendChat state actor message
+    _ -> Left InvalidCommand
+
 -- Bat dau van bang danh sach vai da duoc Server xao tron.
 -- Ham nay khong tu random va khong gui WebSocket.
 startGame
@@ -239,11 +281,22 @@ finishResolvedPhase expectedPhase continuePhase state result = do
           , gameVotingResolved = False
           , gameResult = result
           }
+
       events =
         [PhaseChanged nextPhase] ++
         case result of
-          Nothing -> []
-          Just finalResult -> [GameFinished finalResult]
+          Nothing ->
+            []
+
+          Just finalResult ->
+            [ GameFinished finalResult
+            , GameRolesRevealed
+                [ (playerId player, role)
+                | player <- gamePlayers newState
+                , Just role <- [playerRole player]
+                ]
+            ]
+
   validateGameInvariant newState
   pure (newState, events)
 applyPhaseCommand
@@ -269,8 +322,29 @@ submitNightAction state actor choice = do
   -- Luu hanh dong da duoc xac thuc, khong thay doi state ban dau.
   let newState = state
         { gameNightActions = gameNightActions state ++ [(actor, choice)] }
+
+      -- Chi thong bao tien do khi mot Soi bo phieu hop le.
+      wolfEvents =
+        case choice of
+          WolfTarget _ ->
+            let aliveWolves =
+                  [ p
+                  | p <- gamePlayers newState
+                  , playerLifeStatus p == Alive
+                  , playerRole p == Just Werewolf
+                  ]
+
+                votedWolves =
+                  [ pid
+                  | (pid, WolfTarget _) <- gameNightActions newState
+                  , pid `elem` map playerId aliveWolves
+                  ]
+            in [WolfVoteUpdated (length votedWolves) (length aliveWolves)]
+
+          _ -> []
+
   validateGameInvariant newState
-  pure (newState, events)
+  pure (newState, events ++ wolfEvents)
 -- T05: Server khoa phieu Soi va gui thong bao rieng cho Phu Thuy.
 -- timedOut chi do Server cung cap, khong tin gia tri tu client.
 closeWolfVoting :: GameState -> Bool -> Either GameError (GameState, [DomainEvent])
@@ -283,12 +357,27 @@ closeWolfVoting state timedOut = do
   validateGameInvariant state
   if not timedOut && not (wolfVotingComplete state)
     then Left InvalidGameState else Right ()
-  let newState = state {gameWolfVotingClosed = True}
-      witchIds = [playerId p | p <- gamePlayers state
-                 , playerLifeStatus p == Alive, playerRole p == Just Witch]
-      events = [WitchVictimNotice pid (wolfVictim state) | pid <- witchIds]
+  let newState = state { gameWolfVotingClosed = True }
+
+      witchIds =
+        [ playerId p
+        | p <- gamePlayers state
+        , playerLifeStatus p == Alive
+        , playerRole p == Just Witch
+        ]
+
+      -- Thong bao ket qua khoa phieu cho phe Soi.
+      wolfEvents =
+        [WolfTargetLocked (wolfVictim state)]
+
+      -- Chi Phu Thuy nhan thong tin nan nhan de quyet dinh Heal.
+      witchEvents =
+        [ WitchVictimNotice pid (wolfVictim state)
+        | pid <- witchIds
+        ]
+
   validateGameInvariant newState
-  pure (newState, events)
+  pure (newState, wolfEvents ++ witchEvents)
 -- T05: Nhan Command NightAction theo ADT da dinh nghia tai T02.
 applyNightCommand :: GameState -> Command -> Either GameError (GameState, [DomainEvent])
 applyNightCommand state command =
@@ -361,23 +450,32 @@ completeNightTurn state = do
   if gamePendingHunter state /= Nothing then Left HunterNotPending else Right ()
   validateGameInvariant state
 
-  let lookupPlayer pid = case filter ((== pid) . playerId) (gamePlayers state) of
-        p : _ -> Just p
-        [] -> Nothing
-      reveals =
-        [ PlayerRoleRevealed pid role (teamOfRole role)
-        | pid <- gamePendingReveals state
-        , Just p <- [lookupPlayer pid]
-        , playerLifeStatus p == Dead
-        , Just role <- [playerRole p]
-        ]
-      readyState = state {gamePendingReveals = []}
 
-  if length reveals /= length (gamePendingReveals state)
-    then Left InvalidGameState
-    else Right ()
-  (nextState, phaseEvents) <- finishResolvedNight readyState (nightGameResult readyState)
-  pure (nextState, reveals ++ phaseEvents)
+  let pendingIds = gamePendingReveals state
+
+      -- Kiem tra tat ca nguoi cho chet da duoc danh dau Dead.
+      validatePending pid = do
+        player <- validatePlayerExists pid (gamePlayers state)
+        if playerLifeStatus player == Dead && playerRole player /= Nothing
+          then Right ()
+          else Left InvalidGameState
+
+  mapM_ validatePending pendingIds
+
+  let readyState =
+        state { gamePendingReveals = [] }
+
+      -- Chi cong khai PlayerId, khong cong khai Role/Team.
+      deathEvents =
+        [ PlayerDied pid
+        | pid <- pendingIds
+        ]
+
+  (nextState, phaseEvents) <-
+    finishResolvedNight readyState (nightGameResult readyState)
+
+  pure (nextState, deathEvents ++ phaseEvents)
+
 
 -- T06: Dispatcher chung cho Domain Engine. Các lệnh Resolve vẫn là lệnh
 -- nội bộ do Server gọi, còn Vote/Chat đi qua cùng một pure transition.
@@ -390,6 +488,7 @@ applyCommand state command
   | otherwise =
       case command of
         Join _ _ -> applyLobbyCommand state command
+        JoinWithAppearance _ _ _ -> applyLobbyCommand state command
         Leave _ -> applyLobbyCommand state command
         SetReady _ _ -> applyLobbyCommand state command
         StartGame _ _ -> applyPhaseCommand state command
@@ -397,6 +496,7 @@ applyCommand state command
         NightAction _ _ -> applyNightCommand state command
         Vote actor target -> castVote state actor target
         Chat actor message -> sendChat state actor message
+        ChatInChannel actor channel message -> sendChatInChannel state actor channel message
         ResolveNight -> applyNightCommand state command
         ResolveVoting -> resolveVoting state
         ResolveHunter actor target -> resolveHunterShot state actor target
@@ -506,8 +606,7 @@ resolveHunterShot state actor target = do
   case gamePhase state of
     Night -> do
       (finished, events) <- completeNightTurn newState
-      pure (finished, HunterShotResolved actor target
-        : map PlayerEliminated (gamePendingReveals newState) ++ events)
+      pure (finished, HunterShotResolved actor target : events)
     _ -> finishVotingDeaths newState [HunterShotResolved actor target]
 
 -- T06: Sau khi mọi death effect và Hunter chain đã xong, reveal đúng một
@@ -521,23 +620,33 @@ finishVotingDeaths state prefixEvents = do
   if gamePendingHunter state /= Nothing then Left HunterNotPending else Right ()
   if not (gameVotingResolved state) then Left InvalidGameState else Right ()
   validateGameInvariant state
-  reveals <- pendingRevealEvents state
-  let revealIds = gamePendingReveals state
-      revealedState = state { gamePendingReveals = [] }
-      publicDeaths = [PlayerEliminated pid | pid <- revealIds]
-  -- Dùng lại transition T04 để tránh hai nơi định nghĩa cách tăng vòng.
-  (nextState, phaseEvents) <- finishResolvedVoting revealedState (checkWin revealedState)
-  pure (nextState, prefixEvents ++ publicDeaths ++ reveals ++ phaseEvents)
 
-pendingRevealEvents :: GameState -> Either GameError [DomainEvent]
-pendingRevealEvents state = mapM revealOne (gamePendingReveals state)
-  where
-    revealOne pid = do
-      player <- validatePlayerExists pid (gamePlayers state)
-      case (playerLifeStatus player, playerRole player) of
-        (Dead, Just role) ->
-          Right (PlayerRoleRevealed pid role (teamOfRole role))
-        _ -> Left InvalidGameState
+  let pendingIds = gamePendingReveals state
+
+      -- Kiem tra nguoi cho cong bo da chet va co Role.
+      validatePending pid = do
+        player <- validatePlayerExists pid (gamePlayers state)
+        if playerLifeStatus player == Dead && playerRole player /= Nothing
+          then Right ()
+          else Left InvalidGameState
+
+  mapM_ validatePending pendingIds
+
+  let readyState =
+        state { gamePendingReveals = [] }
+
+      -- Khong gui Role/Team cua nguoi bi loai.
+      deathEvents =
+        [ PlayerDied pid
+        | pid <- pendingIds
+        ]
+
+  -- Giu nguyen logic chuyen pha va kiem tra thang/thua.
+  (nextState, phaseEvents) <-
+    finishResolvedVoting readyState (checkWin readyState)
+
+  pure (nextState, prefixEvents ++ deathEvents ++ phaseEvents)
+
 
 -- T06: Chat chỉ phát event public ở Day và không làm thay đổi gameplay state.
 sendChat
@@ -547,8 +656,21 @@ sendChat
   -> Either GameError (GameState, [DomainEvent])
 sendChat state actor message = do
   validateChat state actor message
-  validateGameInvariant state
-  pure (state, [ChatMessage actor message])
+  pure (state, [ChatMessage actor (normalizePlayerName message)])
+
+-- T07: Chat có kênh; WolvesNight được EventVisibility giới hạn cho phe Sói.
+sendChatInChannel
+  :: GameState
+  -> PlayerId
+  -> ChatChannel
+  -> String
+  -> Either GameError (GameState, [DomainEvent])
+sendChatInChannel state actor channel message = do
+  validateChatInChannel state actor channel message
+  pure
+    ( state
+    , [ChatMessageInChannel channel actor (normalizePlayerName message)]
+    )
 
 markDead :: PlayerId -> [Player] -> [Player]
 markDead targetId = map mark

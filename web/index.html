@@ -9,10 +9,12 @@
     href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
     rel="stylesheet"
   >
-  <link rel="stylesheet" href="style.css">
-  <script src="app.js" defer></script>
+  <link rel="stylesheet" href="style.css?ui=20261015a">
+  <script src="avatar.js?ui=20261014b" defer></script>
+  <script src="app.js?ui=20261015a" defer></script>
 </head>
 <body>
+  <div id="twinkling-stars" class="twinkling-stars" aria-hidden="true"></div>
   <main class="container lobby-page">
     <header class="site-header">
       <div class="brand">
@@ -56,6 +58,10 @@
           <p class="card-description">
             Điền thông tin để xuất hiện trong danh sách người chơi.
           </p>
+          <div class="entrance-mode-tabs" role="group" aria-label="Chọn cách vào phòng">
+            <button id="join-mode-button" class="entrance-mode-button is-active" type="button" aria-pressed="true">Tham gia phòng</button>
+            <button id="host-mode-button" class="entrance-mode-button" type="button" aria-pressed="false">Tạo phòng và làm Host</button>
+          </div>
           <form id="join-form">
             <div class="mb-3">
               <label for="room-id" class="form-label">
@@ -82,6 +88,68 @@
                 required
               >
             </div>
+            <fieldset class="appearance-picker mb-4">
+              <legend>Nhân vật của bạn</legend>
+              <div id="appearance-preview" class="appearance-preview" aria-label="Xem trước nhân vật"></div>
+              <button id="appearance-random" type="button" class="appearance-random">Ngẫu nhiên ngoại hình</button>
+              <div class="appearance-fields">
+                <label>Kiểu tóc
+                  <select id="appearance-hair" class="form-control">
+                    <option value="messy">Bù xù thư sinh</option>
+                    <option value="spiky">Vuốt lãng tử</option>
+                    <option value="curly">Xoăn bồng bềnh</option>
+                    <option value="bob">Tóc bob</option>
+                    <option value="long">Tóc dài</option>
+                    <option value="ponytail">Đuôi ngựa</option>
+                  </select>
+                </label>
+                <label>Màu tóc
+                  <select id="appearance-hair-color" class="form-control">
+                    <option value="#1E293B">Đen tự nhiên</option>
+                    <option value="#78350F">Nâu hạt dẻ</option>
+                    <option value="#F59E0B">Vàng mật ong</option>
+                    <option value="#EF4444">Đỏ cherry</option>
+                    <option value="#EC4899">Hồng anh đào</option>
+                    <option value="#8B5CF6">Tím lavender</option>
+                    <option value="#3B82F6">Xanh lam</option>
+                    <option value="#10B981">Xanh ngọc</option>
+                    <option value="#F8FAFC">Bạch kim</option>
+                  </select>
+                </label>
+                <label>Màu da
+                  <select id="appearance-skin" class="form-control">
+                    <option value="#FDE2D0">Trắng hồng</option>
+                    <option value="#FED7AA">Trắng ngà</option>
+                    <option value="#FDBA74">Vàng ấm</option>
+                    <option value="#C28865">Nâu ấm</option>
+                    <option value="#FEF3C7">Sáng dịu</option>
+                  </select>
+                </label>
+                <label>Trang phục
+                  <select id="appearance-outfit" class="form-control">
+                    <option value="#1E1B4B">Tím than</option>
+                    <option value="#1E3A8A">Xanh đậm</option>
+                    <option value="#064E3B">Xanh rêu</option>
+                    <option value="#701A75">Tím mận</option>
+                    <option value="#881337">Đỏ rượu</option>
+                    <option value="#0F172A">Đen đêm</option>
+                  </select>
+                </label>
+                <label class="appearance-accessory-label">Phụ kiện
+                  <select id="appearance-accessory" class="form-control">
+                    <option value="none">Không có</option>
+                    <option value="straw_hat">Mũ rơm</option>
+                    <option value="cat_ears">Tai mèo</option>
+                    <option value="witch_hat">Mũ phù thủy</option>
+                    <option value="sunglasses">Kính râm</option>
+                    <option value="horns">Sừng</option>
+                    <option value="halo">Hào quang</option>
+                    <option value="flower_crown">Vòng hoa</option>
+                  </select>
+                </label>
+              </div>
+              <p class="appearance-note">Ngoại hình hiện chỉ lưu trên trình duyệt này; cần bổ sung dữ liệu server để mọi người thấy giống nhau.</p>
+            </fieldset>
             <button
               id="join-button"
               class="btn main-button w-100"
@@ -92,10 +160,11 @@
           </form>
           <button
             id="create-button"
-            class="btn leave-button w-100 mt-2"
+            class="btn create-room-button w-100"
             type="button"
+            hidden
           >
-            Tạo phòng
+            Tạo phòng và làm Host
           </button>
           <p class="card-note">
             Tối đa 9 người trong một phòng.
@@ -106,29 +175,37 @@
         <section id="voting-section" class="lobby-card voting-card" hidden aria-labelledby="voting-title">
           <p class="section-label">DIỄN BIẾN VÁN CHƠI</p>
           <h2 id="voting-title">Bỏ phiếu</h2>
+          <div id="vote-clock" class="vote-clock" role="timer" aria-label="Thời gian bỏ phiếu còn lại" hidden>
+            <span class="vote-clock-label">Thời gian chọn người</span>
+            <strong id="vote-clock-value">01:00</strong>
+            <div class="vote-clock-track"><span id="vote-clock-bar"></span></div>
+          </div>
           <p id="voting-status" role="status" aria-live="polite"></p>
           <form id="vote-form">
             <label for="vote-target" class="form-label">Chọn người chơi</label>
             <select id="vote-target" class="form-control" required></select>
-            <p class="card-description">Mỗi vòng chỉ được gửi một phiếu. Bạn có thể không gửi phiếu để bỏ lượt; server sẽ chốt khi hết thời gian.</p>
+            <p class="card-description">Bạn có 60 giây để chọn một người. Có thể không gửi phiếu để bỏ lượt; server sẽ chốt khi hết giờ.</p>
             <button id="vote-button" class="btn main-button" type="submit">Gửi phiếu</button>
           </form>
           <p id="vote-result" role="status" aria-live="polite"></p>
           <ul id="vote-tally" aria-label="Kết quả kiểm phiếu"></ul>
-          <ul id="vote-reveals" aria-label="Vai của người đã bị loại"></ul>
+          <ul id="vote-reveals" aria-label="Thông tin loại người chơi"></ul>
         </section>
 
-        <!-- Lobby Player List -->
+        <!-- Dashboard dùng dữ liệu thật từ server, không dùng người chơi giả của folder UI. -->
         <section id="lobby-section" class="lobby-card" hidden>
           <div class="room-heading">
             <div>
               <p class="section-label">ĐANG TRONG PHÒNG</p>
               <h2 id="room-title"></h2>
             </div>
-            <span id="player-count" class="player-count"></span>
+            <div class="dashboard-heading-actions">
+              <span id="player-count" class="player-count"></span>
+              <button id="game-help-button" type="button" class="btn leave-button" aria-label="Hướng dẫn chơi">?</button>
+            </div>
           </div>
           <div class="list-heading">
-            <h3>Người chơi</h3>
+            <h3>Bàn cờ dân làng · 9 ô</h3>
             <span id="ready-count"></span>
           </div>
           <ul
@@ -137,7 +214,7 @@
             aria-live="polite"
           ></ul>
           <p id="self-status" class="self-status"></p>
-          <div class="actions">
+          <div id="lobby-actions" class="actions">
             <button
               id="ready-button"
               class="btn main-button"
@@ -165,6 +242,74 @@
             Bắt đầu ván
           </button>
         </section>
+
+        <dialog id="game-help-dialog" class="game-dialog game-help-dialog" aria-labelledby="game-help-title">
+          <h2 id="game-help-title">Hướng dẫn chơi Ma Sói</h2>
+          <p class="help-intro">Bạn thuộc phe Sói hoặc phe Dân. Giữ kín vai của mình, quan sát diễn biến và phối hợp với đồng đội để giành chiến thắng.</p>
+          <div class="help-content">
+            <section>
+              <h3>1. Vào phòng và bắt đầu</h3>
+              <ul>
+                <li>Tạo phòng hoặc nhập mã phòng để tham gia. Chọn ngoại hình chỉ thay đổi hình nhân vật, không thay đổi vai hay sức mạnh.</li>
+                <li>Ván chơi bắt đầu khi có đúng <strong>8 hoặc 9 người</strong>, tất cả đã chọn <strong>Sẵn sàng</strong> và <strong>Host</strong> nhấn Bắt đầu.</li>
+                <li>Server chia vai ngẫu nhiên và gửi vai riêng cho từng người. Không xem được vai của người khác khi ván đang diễn ra.</li>
+              </ul>
+              <div class="help-preset">
+                <p><strong>Phòng 8 người:</strong> 2 Sói, 1 Tiên tri, 1 Bảo vệ, 1 Phù thủy, 1 Thợ săn, 2 Dân làng.</p>
+                <p><strong>Phòng 9 người:</strong> 3 Sói, 1 Tiên tri, 1 Bảo vệ, 1 Phù thủy, 1 Thợ săn, 2 Dân làng.</p>
+              </div>
+            </section>
+            <section>
+              <h3>2. Các giai đoạn của một vòng</h3>
+              <p>Trình tự là <strong>Đêm 1 → Ngày 1 (thảo luận) → Bỏ phiếu 1 → Đêm 2</strong> và tiếp tục như vậy cho đến khi có phe thắng hoặc hòa. Server tự chuyển giai đoạn; người chơi không tự chuyển lượt.</p>
+              <p>Trong đêm, người còn sống có kỹ năng chọn hành động hợp lệ. Mỗi người chỉ được gửi một hành động cho vai của mình trong đêm đó; lựa chọn đã được chấp nhận không đổi lại được. Không hành động trước khi lượt kết thúc được tính là bỏ qua.</p>
+            </section>
+            <section>
+              <h3>3. Kỹ năng của từng vai</h3>
+              <ul class="help-role-list">
+                <li><strong>🐺 Sói:</strong> Mỗi Sói còn sống chọn tối đa một người phe Dân còn sống để cắn; không chọn Sói. Người có số lựa chọn cao nhất <em>duy nhất</em> là nạn nhân. Ví dụ ba Sói chọn A–A–B thì A bị nhắm; hòa cao nhất hoặc không có lựa chọn thì không ai bị Sói cắn.</li>
+                <li><strong>🔮 Tiên tri:</strong> Mỗi đêm soi tối đa một người còn sống khác mình. Kết quả gửi riêng chỉ cho biết người đó thuộc <strong>phe Sói</strong> hay <strong>phe Dân</strong>, không cho biết vai cụ thể.</li>
+                <li><strong>🛡️ Bảo vệ:</strong> Mỗi đêm bảo vệ tối đa một người còn sống, có thể tự bảo vệ. Không bảo vệ cùng một người trong hai đêm liên tiếp. Bảo vệ chỉ chặn Sói cắn, không chặn thuốc độc hoặc phát bắn của Thợ săn.</li>
+                <li><strong>🧪 Phù thủy:</strong> Mỗi đêm chọn <strong>một</strong> trong ba việc: cứu nạn nhân bị Sói nhắm, đầu độc một người còn sống khác mình, hoặc bỏ qua. Có một bình cứu và một bình độc cho cả ván, mỗi bình dùng tối đa một lần. Chỉ cứu được khi đêm đó thật sự có nạn nhân của Sói; bình cứu không dùng để chọn người bất kỳ. Không dùng cả hai bình trong cùng một đêm. Thuốc độc không bị Bảo vệ chặn.</li>
+                <li><strong>🏹 Thợ săn:</strong> Khi chết vì bất kỳ nguyên nhân nào, có tối đa một lần bắn một người khác đang sống hoặc bỏ qua. Không được bắn chính mình hay người đã chết. Hết thời gian mà không chọn thì bỏ qua. Phát bắn được xử lý trước khi xét thắng.</li>
+                <li><strong>🌾 Dân làng:</strong> Không có kỹ năng ban đêm. Khi còn sống, hãy thảo luận ban ngày, suy luận và bỏ phiếu.</li>
+              </ul>
+              <p class="help-note">Mọi mục tiêu và hành động đều được server kiểm tra. Người đã chết không dùng kỹ năng nữa, trừ lượt bắn đang chờ của Thợ săn.</p>
+            </section>
+            <section>
+              <h3>4. Ban ngày và trò chuyện</h3>
+              <p>Sau khi đêm được xử lý, mọi người biết ai đã bị loại và những người <strong>còn sống</strong> được chat chung để thảo luận. Người đã chết chỉ theo dõi, không gửi chat. Không gửi chat chung trong Lobby, Đêm, Bỏ phiếu hoặc sau khi ván kết thúc.</p>
+              <p>Khung trò chuyện có mục <strong>Ngày 1, Ngày 2…</strong> để xem lại tin theo ngày. Sói có tab chat riêng theo đêm; tin ở đó chỉ dành cho Sói còn sống. Tính năng gửi và khôi phục chat Sói cần Server hỗ trợ trước khi dùng trong ván chơi.</p>
+              <p>Thông tin riêng như kết quả soi, mục tiêu bảo vệ, thuốc của Phù thủy và lựa chọn của Sói không được công bố trong chat hệ thống. Bạn có thể tự nói về vai của mình, nhưng người khác phải tự đánh giá lời nói đó có đáng tin hay không.</p>
+            </section>
+            <section>
+              <h3>5. Bỏ phiếu loại người</h3>
+              <ul>
+                <li>Thời gian bỏ phiếu là <strong>60 giây</strong> do server chốt. Đồng hồ trên giao diện giúp bạn theo dõi thời gian còn lại.</li>
+                <li>Chỉ người còn sống được bỏ phiếu trong giai đoạn Bỏ phiếu. Mỗi người chọn tối đa <strong>một người khác còn sống</strong>; không tự bỏ phiếu cho mình.</li>
+                <li>Phiếu đã gửi không đổi được trong cùng vòng. Bạn có thể bỏ phiếu trắng bằng cách không gửi phiếu.</li>
+                <li>Người nhận nhiều phiếu nhất và <strong>không hòa</strong> bị loại. Nếu hòa ở mức cao nhất hoặc không có phiếu, không ai bị loại và <strong>không bỏ phiếu lại</strong>.</li>
+                <li>Nếu người bị loại là Thợ săn, lượt bắn của họ được xử lý trước khi xác định kết quả ván chơi.</li>
+              </ul>
+            </section>
+            <section>
+              <h3>6. Chết, giữ bí mật và kết thúc</h3>
+              <p>Người chết được đánh dấu trên ô nhân vật, không thể chat, bỏ phiếu hoặc dùng hành động thường; người chết không sống lại. Theo yêu cầu giao diện của nhóm, <strong>vai người chết không hiện trên ô cho tới khi ván kết thúc</strong>. Cuối ván, bảng kết quả mới hiển thị vai của mọi người.</p>
+              <ul>
+                <li><strong>Hòa:</strong> không còn ai sống. Trường hợp này được xét trước mọi điều kiện thắng khác.</li>
+                <li><strong>Phe Dân thắng:</strong> còn ít nhất một người sống và không còn Sói sống.</li>
+                <li><strong>Phe Sói thắng:</strong> còn Sói sống và số Sói còn sống <strong>ít nhất bằng</strong> số người phe Dân còn sống.</li>
+                <li>Nếu chưa đạt điều kiện nào, ván chơi tiếp tục sang vòng sau. Kết quả chỉ được chốt sau khi xử lý xong mọi cái chết và lượt bắn Thợ săn đang chờ.</li>
+              </ul>
+            </section>
+          </div>
+          <button type="button" class="btn main-button dialog-close help-close">Đã hiểu · Đóng</button>
+        </dialog>
+        <dialog id="role-help-dialog" class="game-dialog">
+          <h2 id="role-help-title">Khả năng của tôi</h2>
+          <p id="role-help-text"></p>
+          <button type="button" class="btn main-button dialog-close">Đóng</button>
+        </dialog>
 
         <!-- T05 Night Actions -->
         <section
@@ -216,6 +361,14 @@
             <p class="card-description">
               Chọn một người chơi hợp lệ để tấn công trong đêm.
             </p>
+            <div
+              id="wolf-vote-status"
+              class="night-result-panel wolf-vote-status mb-3"
+              role="status"
+              aria-live="polite"
+            >
+              Hãy cùng các Sói còn sống chốt một mục tiêu.
+            </div>
             <label for="wolf-target" class="form-label">
               Mục tiêu
             </label>
@@ -416,36 +569,38 @@
               </p>
             </div>
 
-            <label for="hunter-target" class="form-label">
-              Người muốn bắn
-            </label>
-            <select
-              id="hunter-target"
-              class="form-select mb-3"
-              disabled
-            >
-              <option value="">
-                -- Chọn người chơi còn sống --
-              </option>
-            </select>
+            <div id="hunter-choice-panel" hidden>
+              <label for="hunter-target" class="form-label">
+                Người muốn bắn
+              </label>
+              <select
+                id="hunter-target"
+                class="form-select mb-3"
+                disabled
+              >
+                <option value="">
+                  -- Chọn người chơi còn sống --
+                </option>
+              </select>
 
-            <button
-              id="hunter-shoot"
-              class="btn main-button w-100 mb-3"
-              type="button"
-              disabled
-            >
-              Bắn người đã chọn
-            </button>
+              <button
+                id="hunter-shoot"
+                class="btn main-button w-100 mb-3"
+                type="button"
+                disabled
+              >
+                Bắn người đã chọn
+              </button>
 
-            <button
-              id="hunter-pass"
-              class="btn leave-button w-100"
-              type="button"
-              disabled
-            >
-              Bỏ lượt bắn
-            </button>
+              <button
+                id="hunter-pass"
+                class="btn leave-button w-100"
+                type="button"
+                disabled
+              >
+                Bỏ lượt bắn
+              </button>
+            </div>
 
             <p
               id="hunter-status"
@@ -453,10 +608,47 @@
               role="status"
               aria-live="polite"
             >
-              Đang chờ thông báo từ Server.
+              Bạn đang còn sống; quyền bắn chưa được kích hoạt.
             </p>
           </section>
 
+        <!-- T07: Lịch sử chat được Server lưu theo ngày và theo kênh. -->
+        <section id="day-section" class="lobby-card" hidden>
+          <p class="section-label">TRÒ CHUYỆN</p>
+          <h2 id="chat-heading">Chat chung · Ngày 1</h2>
+          <div id="day-clock" class="day-clock" role="timer"
+            aria-label="Thời gian thảo luận còn lại" hidden>
+            <span id="day-clock-label" class="day-clock-label">Thời gian thảo luận</span>
+            <strong id="day-clock-value">03:00</strong>
+            <div class="day-clock-track"><span id="day-clock-bar"></span></div>
+          </div>
+          <div class="chat-tabs" role="group" aria-label="Kênh trò chuyện">
+            <button id="chat-public-tab" type="button" aria-pressed="true">Chat chung</button>
+            <button id="chat-wolves-tab" type="button" aria-pressed="false" hidden>Chat Sói</button>
+          </div>
+          <label for="chat-day-select" class="form-label">Xem lịch sử theo ngày</label>
+          <select id="chat-day-select" class="form-control chat-day-select"></select>
+          <div id="chat-messages" class="chat-messages" aria-live="polite"></div>
+          <form id="chat-form" class="chat-form">
+            <label for="chat-input" class="form-label">Tin nhắn</label>
+            <div class="input-group">
+              <input id="chat-input" class="form-control" maxlength="300"
+                autocomplete="off" placeholder="Nhập nội dung thảo luận...">
+              <button id="chat-submit" class="btn main-button" type="submit">
+                Gửi
+              </button>
+            </div>
+          </form>
+          <p id="chat-status" class="self-status mt-3"></p>
+        </section>
+
+        <!-- T07 Game Result -->
+        <section id="result-section" class="lobby-card result-card" hidden>
+          <p class="section-label">VÁN CHƠI KẾT THÚC</p>
+          <h2 id="result-title">Kết quả</h2>
+          <p id="result-message" class="result-message"></p>
+          <div id="revealed-role-list" class="revealed-role-list"></div>
+        </section>
       </div>
     </div>
   </main>
