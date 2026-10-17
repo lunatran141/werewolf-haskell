@@ -79,13 +79,12 @@ chatMessageForState rid recipient state record =
     MsgChatHistorySnapshot _ [_] -> Just (MsgStoredChatMessage rid record)
     _ -> Nothing
 
--- T06: Người chết đang chờ Hunter vẫn hiển thị như trước batch với người khác.
--- Chỉ Hunter biết mình có quyền bắn; không lộ danh sách chết trước reveal.
+-- Trạng thái sống/chết là công khai; chỉ vai trò được giữ kín tới GameOver.
 votingSnapshot :: RoomId -> PlayerId -> GameState -> ServerMessage
 votingSnapshot rid recipient state = MsgVotingSnapshot rid
   (gamePhase state) (gameDay state)
   [ VotingPlayerView (playerId p) (playerName p)
-      (playerLifeStatus p == Alive || playerId p `elem` gamePendingReveals state)
+      (playerLifeStatus p == Alive)
   | p <- gamePlayers state ]
   (recipient `elem` map fst (gameVotes state))
   (gamePendingHunter state == Just recipient)

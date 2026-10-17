@@ -28,6 +28,7 @@ import Control.Concurrent.STM
   )
 
 import Data.Char (isSpace)
+import Data.List (intercalate)
 import GHC.Clock (getMonotonicTimeNSec)
 
 import Domain.Engine
@@ -340,7 +341,7 @@ processPlayerCommand room = do
 
     Right (nextState, events) -> do
       if tracked then writeTVar (roomAcceptedRequests room) (key : accepted) else pure ()
-      storedChat <- appendAcceptedChat room nextState events
+      storedChat <- appendAcceptedRecord room currentState nextState events
       currentVersion <- readTVar (roomVersion room)
 
       let nextVersion = currentVersion + 1
@@ -361,17 +362,27 @@ processPlayerCommand room = do
 
 -- T07: Lưu đúng nội dung đã được Engine chuẩn hóa. Việc tăng sequence và
 -- append history nằm trong cùng STM với commit state/event của phòng.
-appendAcceptedChat :: RoomRuntime -> GameState -> [DomainEvent] -> STM (Maybe ChatRecord)
-appendAcceptedChat room state events =
+appendAcceptedRecord
+  :: RoomRuntime
+  -> GameState
+  -> GameState
+  -> [DomainEvent]
+  -> STM (Maybe ChatRecord)
+appendAcceptedRecord room previousState state events =
   case chatPayload events of
-    Nothing -> pure Nothing
-    Just (channel, senderId, messageText) -> do
+    Just payload -> appendPayload payload
+    Nothing ->
+      case timelinePayload previousState state events of
+        Nothing -> pure Nothing
+        Just payload -> appendPayload payload
+  where
+    appendPayload (day, channel, senderId, messageText) = do
       sequenceNumber <- readTVar (roomNextChatSequence room)
       history <- readTVar (roomChatHistory room)
       let messageId = roomId room ++ "-chat-" ++ show sequenceNumber
           record = ChatRecord
             { chatRoomId = roomId room
-            , chatDay = gameDay state
+            , chatDay = day
             , chatChannel = channel
             , chatMessageId = messageId
             , chatSequence = sequenceNumber
@@ -381,15 +392,63 @@ appendAcceptedChat room state events =
       writeTVar (roomChatHistory room) (history ++ [record])
       writeTVar (roomNextChatSequence room) (sequenceNumber + 1)
       pure (Just record)
-  where
+
     chatPayload [] = Nothing
     chatPayload (event : remaining) =
       case event of
         ChatMessage senderId messageText ->
-          Just (PublicDay, senderId, messageText)
+          Just (gameDay state, PublicDay, senderId, messageText)
         ChatMessageInChannel channel senderId messageText ->
-          Just (channel, senderId, messageText)
+          Just (gameDay state, channel, senderId, messageText)
         _ -> chatPayload remaining
+
+-- Kết quả lượt chơi cũng là lịch sử công khai. Lưu cùng chat giúp người chơi
+-- đổi ngày hoặc kết nối lại vẫn thấy kết quả phiếu và danh sách người chết.
+timelinePayload
+  :: GameState
+  -> GameState
+  -> [DomainEvent]
+  -> Maybe (Int, ChatChannel, PlayerId, String)
+timelinePayload previousState state events =
+  case firstVoting events of
+    Just (tally, target) ->
+      Just (gameDay previousState, PublicDay, "__system__", votingText tally target)
+    Nothing ->
+      case firstHunter events of
+        Just (hunterId, target) ->
+          Just (gameDay previousState, PublicDay, "__system__", hunterText hunterId target)
+        Nothing -> Nothing
+  where
+    deaths = [pid | PlayerDied pid <- events]
+    label pid =
+      case [playerName player | player <- gamePlayers state, playerId player == pid] of
+        name : _ -> name
+        [] -> pid
+    tallyText [] = "không có phiếu"
+    tallyText entries = intercalate ", "
+      [label pid ++ ": " ++ show count ++ " phiếu" | (pid, count) <- entries]
+    deathText =
+      case deaths of
+        [] -> ""
+        _ -> " Người đã chết: " ++ intercalate ", " (map label deaths) ++ "."
+    votingText tally target =
+      "Kết quả bỏ phiếu vòng " ++ show (gameDay previousState) ++ ": " ++
+      tallyText tally ++ ". " ++
+      case target of
+        Nothing -> "Không ai bị loại."
+        Just pid -> label pid ++ " có số phiếu cao nhất và bị loại." ++ deathText
+    hunterText hunterId target =
+      "Thợ Săn " ++ label hunterId ++
+      case target of
+        Nothing -> " đã bỏ lượt bắn." ++ deathText
+        Just pid -> " đã bắn " ++ label pid ++ "." ++ deathText
+
+    firstVoting [] = Nothing
+    firstVoting (VotingResolved tally target : _) = Just (tally, target)
+    firstVoting (_ : remaining) = firstVoting remaining
+    firstHunter [] = Nothing
+    firstHunter (HunterShotResolved hunter target : _) = Just (hunter, target)
+    firstHunter (_ : remaining) = firstHunter remaining
 
 -- Worker xu ly Command Queue.
 -- Dung khi nguoi cuoi cung roi phong.
@@ -405,9 +464,10 @@ applyInternalCommand room command = do
     Left err -> pure (Left err)
     Right (nextState, events) -> do
       version <- readTVar (roomVersion room)
+      storedRecord <- appendAcceptedRecord room state nextState events
       writeTVar (roomState room) nextState
       writeTVar (roomVersion room) (version + 1)
-      writeTChan (roomUpdates room) (RoomUpdate (version + 1) nextState events Nothing)
+      writeTChan (roomUpdates room) (RoomUpdate (version + 1) nextState events storedRecord)
       pure (Right nextState)
 
 -- Khóa cửa sổ bằng phase/vòng/Hunter: chat và phiếu mới không gia hạn timer.
