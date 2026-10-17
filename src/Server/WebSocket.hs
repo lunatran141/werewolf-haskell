@@ -6,19 +6,13 @@ import Control.Concurrent.MVar (modifyMVar, withMVar)
 
 import Control.Concurrent.STM
 
-  ( TQueue
-
-  , atomically
+  ( atomically
 
   , dupTChan
 
   , newEmptyTMVarIO
 
-  , newTQueueIO
-
   , readTChan
-
-  , readTQueue
 
   , readTVar
 
@@ -28,8 +22,6 @@ import Control.Concurrent.STM
 
   , writeTBQueue
 
-  , writeTQueue
-
   , writeTVar
 
   , modifyTVar'
@@ -38,7 +30,7 @@ import Control.Concurrent.STM
 
 import Control.Exception (finally)
 
-import Control.Monad (forM_, forever)
+import Control.Monad (forM_, forever, void)
 
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.Word (Word64)
@@ -54,10 +46,8 @@ import Domain.Types
   , GameState(..)
   , Player(..)
   , PlayerId
-  , LifeStatus(..)
   , Phase(..)
   , NightChoice(..)
-  , Role(..)
   )
 
 import Domain.Validation (expectedRoles)
@@ -98,6 +88,16 @@ import Server.Broadcast
   , votingSnapshot
   , chatHistorySnapshot
   , chatMessageForState
+  , wolfTeamMessage
+  , privateActionStateMessage
+  , discussionSkipStateMessage
+  )
+
+import Server.Connection
+  ( OutboundQueue
+  , newOutboundQueue
+  , readOutbound
+  , writeBoundedDropOldest
   )
 
 import Server.GameLoop
@@ -118,55 +118,17 @@ import Server.Room
 
   )
 
+import Server.Supervisor (runIgnoringBenignSocketException)
+
 import System.Random (newStdGen, randomIO)
 
--- Gui ServerMessage vao hang doi cua mot ket noi.
+-- Gui ServerMessage vao hang doi co gioi han cua mot ket noi.
 
-sendToClient :: TQueue ServerMessage -> ServerMessage -> IO ()
+sendToClient :: OutboundQueue -> ServerMessage -> IO ()
 
 sendToClient outbound message =
 
-  atomically (writeTQueue outbound message)
-
--- Chỉ Server suy ra danh sách đồng đội từ GameState. Browser không được tự
--- khai mình là Sói để xin dữ liệu này.
-wolfTeamMessage :: RoomId -> PlayerId -> GameState -> Maybe ServerMessage
-wolfTeamMessage rid actor state =
-  case filter ((== actor) . playerId) (gamePlayers state) of
-    player : _
-      | playerRole player == Just Werewolf ->
-          Just (MsgWolfTeam rid
-            [ playerId teammate
-            | teammate <- gamePlayers state
-            , playerRole teammate == Just Werewolf
-            ])
-    _ -> Nothing
-
-privateActionStateMessage :: RoomId -> PlayerId -> GameState -> ServerMessage
-privateActionStateMessage rid actor state =
-  MsgPrivateActionState
-    rid
-    (actor `elem` map fst (gameNightActions state))
-    (if actorHasRole Witch then Just (gameWitchHealReady state) else Nothing)
-    (if actorHasRole Witch then Just (gameWitchPoisonReady state) else Nothing)
-    (if actorHasRole Guard then gameLastProtected state else Nothing)
-  where
-    actorHasRole role = any
-      (\player -> playerId player == actor && playerRole player == Just role)
-      (gamePlayers state)
-
-discussionSkipStateMessage :: RoomId -> PlayerId -> GameState -> ServerMessage
-discussionSkipStateMessage rid actor state =
-  MsgDiscussionSkipState rid submitted total hasSkipped
-  where
-    livingPlayers =
-      [ player
-      | player <- gamePlayers state
-      , playerLifeStatus player == Alive
-      ]
-    submitted = length (gameDiscussionSkips state)
-    total = length livingPlayers
-    hasSkipped = actor `elem` gameDiscussionSkips state
+  void (atomically (writeBoundedDropOldest outbound message))
 
 isRoleAssignment :: DomainEvent -> Bool
 isRoleAssignment event =
@@ -178,7 +140,7 @@ isRoleAssignment event =
 
 reject
 
-  :: TQueue ServerMessage
+  :: OutboundQueue
 
   -> RequestId
 
@@ -333,11 +295,13 @@ beginSession
 
   -> IORef (Maybe (RoomRuntime, ThreadId))
 
-  -> TQueue ServerMessage
+  -> OutboundQueue
 
   -> IO ()
 
 beginSession room actor sessionRef outbound = do
+
+  let enqueueSTM = void . writeBoundedDropOldest outbound
 
   updates <- atomically $ do
 
@@ -347,7 +311,7 @@ beginSession room actor sessionRef outbound = do
 
     history <- readTVar (roomChatHistory room)
 
-    writeTQueue outbound
+    enqueueSTM
 
       (lobbySnapshot (roomId room) actor state)
 
@@ -355,31 +319,31 @@ beginSession room actor sessionRef outbound = do
     case filter ((== actor) . playerId) (gamePlayers state) of
       player : _ ->
         case playerRole player of
-          Just role -> writeTQueue outbound (MsgYourRole (roomId room) role)
+          Just role -> enqueueSTM (MsgYourRole (roomId room) role)
           Nothing -> pure ()
       [] -> pure ()
 
     forM_ (wolfTeamMessage (roomId room) actor state)
-      (writeTQueue outbound)
+      enqueueSTM
 
     if gamePhase state /= Lobby
-      then writeTQueue outbound
+      then enqueueSTM
         (privateActionStateMessage (roomId room) actor state)
       else pure ()
 
     if gamePhase state /= Lobby
-      then writeTQueue outbound (votingSnapshot (roomId room) actor state)
+      then enqueueSTM (votingSnapshot (roomId room) actor state)
       else pure ()
 
     if gamePhase state == Day
-      then writeTQueue outbound
+      then enqueueSTM
         (discussionSkipStateMessage (roomId room) actor state)
       else pure ()
 
     case gameResult state of
       Just result -> do
-        writeTQueue outbound (MsgGameFinished (roomId room) result)
-        writeTQueue outbound
+        enqueueSTM (MsgGameFinished (roomId room) result)
+        enqueueSTM
           (MsgGameRolesRevealed (roomId room)
             [ (playerId player, role)
             | player <- gamePlayers state
@@ -389,14 +353,14 @@ beginSession room actor sessionRef outbound = do
 
     if null history
       then pure ()
-      else writeTQueue outbound
+      else enqueueSTM
         (chatHistorySnapshot (roomId room) actor state history)
 
     pure channel
 
   sendPhaseTimeRemaining outbound room
 
-  broadcastThread <- forkIO $ forever $ do
+  broadcastThread <- forkIO $ runIgnoringBenignSocketException $ forever $ do
 
     update <- atomically (readTChan updates)
 
@@ -461,7 +425,7 @@ beginSession room actor sessionRef outbound = do
 
 -- Chuyển deadline monotonic nội bộ thành thời lượng còn lại. Browser không cần
 -- dùng cùng đồng hồ với Server và reconnect không làm cửa sổ chạy lại từ đầu.
-sendPhaseTimeRemaining :: TQueue ServerMessage -> RoomRuntime -> IO ()
+sendPhaseTimeRemaining :: OutboundQueue -> RoomRuntime -> IO ()
 sendPhaseTimeRemaining outbound room = do
   phaseDeadline <- readTVarIO (roomPhaseDeadline room)
   case phaseDeadline of
@@ -483,7 +447,7 @@ establishNewSession
   :: RoomRuntime
   -> PlayerId
   -> IORef (Maybe (RoomRuntime, ThreadId))
-  -> TQueue ServerMessage
+  -> OutboundQueue
   -> IO ()
 establishNewSession room actor sessionRef outbound = do
   token <- newSessionToken
@@ -591,7 +555,7 @@ handleStartGame
 
   -> PlayerId
 
-  -> TQueue ServerMessage
+  -> OutboundQueue
 
   -> IO ()
 
@@ -655,7 +619,7 @@ handleClientMessage
 
   -> IORef (Maybe (RoomRuntime, ThreadId))
 
-  -> TQueue ServerMessage
+  -> OutboundQueue
 
   -> ClientMessage
 
@@ -1071,17 +1035,17 @@ webSocketApp registry startWorker pending = do
 
   actorRef <- newIORef actor
 
-  outbound <- newTQueueIO
+  outbound <- newOutboundQueue
 
-  -- Moi connection co mot writer rieng.
+  -- Moi connection co mot writer rieng, bo qua ngoai le dong socket thong thuong.
 
-  writerThread <- forkIO $ forever $ do
+  writerThread <- forkIO $ runIgnoringBenignSocketException $ forever $ do
 
-    message <- atomically (readTQueue outbound)
+    message <- atomically (readOutbound outbound)
 
     WS.sendTextData connection (encodeServerMessage message)
 
-  let receiveLoop = forever $ do
+  let receiveLoop = runIgnoringBenignSocketException $ forever $ do
 
         frame <- WS.receiveDataMessage connection
 

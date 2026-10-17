@@ -9,6 +9,9 @@ module Server.Broadcast
   , votingSnapshot
   , chatHistorySnapshot
   , chatMessageForState
+  , wolfTeamMessage
+  , privateActionStateMessage
+  , discussionSkipStateMessage
   ) where
 
 import Data.Maybe (mapMaybe)
@@ -88,6 +91,46 @@ votingSnapshot rid recipient state = MsgVotingSnapshot rid
   (gamePendingHunter state == Just recipient)
   (gameVotingResolved state)
   (gameResult state)
+
+-- Chỉ Server suy ra danh sách đồng đội từ GameState. Browser không được tự
+-- khai mình là Sói để xin dữ liệu này.
+wolfTeamMessage :: RoomId -> PlayerId -> GameState -> Maybe ServerMessage
+wolfTeamMessage rid actor state =
+  case filter ((== actor) . playerId) (gamePlayers state) of
+    player : _
+      | playerRole player == Just Werewolf ->
+          Just (MsgWolfTeam rid
+            [ playerId teammate
+            | teammate <- gamePlayers state
+            , playerRole teammate == Just Werewolf
+            ])
+    _ -> Nothing
+
+privateActionStateMessage :: RoomId -> PlayerId -> GameState -> ServerMessage
+privateActionStateMessage rid actor state =
+  MsgPrivateActionState
+    rid
+    (actor `elem` map fst (gameNightActions state))
+    (if actorHasRole Witch then Just (gameWitchHealReady state) else Nothing)
+    (if actorHasRole Witch then Just (gameWitchPoisonReady state) else Nothing)
+    (if actorHasRole Guard then gameLastProtected state else Nothing)
+  where
+    actorHasRole role = any
+      (\player -> playerId player == actor && playerRole player == Just role)
+      (gamePlayers state)
+
+discussionSkipStateMessage :: RoomId -> PlayerId -> GameState -> ServerMessage
+discussionSkipStateMessage rid actor state =
+  MsgDiscussionSkipState rid submitted total hasSkipped
+  where
+    livingPlayers =
+      [ player
+      | player <- gamePlayers state
+      , playerLifeStatus player == Alive
+      ]
+    submitted = length (gameDiscussionSkips state)
+    total = length livingPlayers
+    hasSkipped = actor `elem` gameDiscussionSkips state
 
 -- Lobby
 -- Tao PlayerView chi chua thong tin cong khai.
