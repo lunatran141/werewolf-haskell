@@ -17,6 +17,7 @@ library
     , Server.Connection
     , Server.GameLoop
     , Server.Room
+    , Server.Supervisor
     , Server.WebSocket
   hs-source-dirs: src
   default-language: GHC2021
@@ -112,7 +113,7 @@ test-suite server-gameloop-test
   main-is: ServerGameLoopSpec.hs
   hs-source-dirs: test
   default-language: GHC2021
-  ghc-options: -Wall -Wcompat
+  ghc-options: -Wall -Wcompat -threaded
   build-depends:
       base >=4.17 && <5
     , werewolf-server

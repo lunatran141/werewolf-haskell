@@ -6,6 +6,7 @@ module Server.GameLoop
   , runGameLoopWithTimeouts
   , runGameLoopWithPhaseTimeouts
   , applyInternalCommand
+  , trySubmitCommand
   , CreateRoomError(..)
   , createRoomWithHost
   , createRoomWithHostAppearance
@@ -59,6 +60,7 @@ import Domain.Types
 
 import Protocol.Types (RequestId, RoomId)
 
+import Server.Connection (tryEnqueueRoomCommand)
 import Server.Room
   ( QueuedCommand(..)
   , RoomRegistry(..)
@@ -286,7 +288,30 @@ dispatchPlayerCommand state command =
 processNextLobbyCommand :: RoomRuntime -> IO ()
 processNextLobbyCommand room = atomically (processPlayerCommand room)
 
--- T06: Dùng chung giao dịch cho worker và kiểm thử một lệnh.
+-- | Đưa lệnh vào queue có giới hạn (backpressure):
+-- Nếu hàng đợi đầy thì trả về Nothing ngay lập tức mà không treo luồng gọi;
+-- nếu còn chỗ thì đưa vào queue và chờ kết quả xử lý từ GameLoop.
+trySubmitCommand
+  :: RoomRuntime
+  -> RequestId
+  -> PlayerId
+  -> Command
+  -> IO (Maybe (Either GameError GameState))
+trySubmitCommand room requestId actor command = do
+  reply <- newEmptyTMVarIO
+  enqueued <- atomically $
+    tryEnqueueRoomCommand room
+      QueuedCommand
+        { queuedRequestId = requestId
+        , queuedActorId = actor
+        , queuedCommand = command
+        , queuedReply = reply
+        }
+  if enqueued
+    then Just <$> atomically (takeTMVar reply)
+    else pure Nothing
+
+-- T06/T08: Dùng chung giao dịch cho worker và kiểm thử một lệnh.
 processPlayerCommand :: RoomRuntime -> STM ()
 processPlayerCommand room = do
   request <- readTBQueue (roomCommands room)
@@ -295,6 +320,7 @@ processPlayerCommand room = do
 
   let key = (queuedActorId request, queuedRequestId request)
       tracked = case queuedCommand request of
+        NightAction _ _ -> True
         Vote _ _ -> True
         ResolveHunter _ _ -> True
         Chat _ _ -> True
@@ -439,7 +465,7 @@ runGameLoopWithPhaseTimeouts dayMicros voteMicros hunterMicros room = startWindo
                         _ -> ResolveVoting
                   result <- applyInternalCommand room command
                   case result of
-                    Left err -> error ("T06: trạng thái timer không hợp lệ: " ++ show err)
+                    Left _ -> pure True
                     Right _ -> pure True)
               `orElse`
               (processPlayerCommand room >> pure False)
