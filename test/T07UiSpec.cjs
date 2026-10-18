@@ -77,6 +77,19 @@ test('Trình duyệt dùng token đã lưu để reconnect đúng phòng', () =>
   assert.equal(JSON.parse(storage.get('werewolf-session')).sessionToken, 'new-token');
 });
 
+test('Phiên reconnect cũ tự được xóa và không hiện cảnh báo khi mở lại trang', () => {
+  const saved = {roomId: 'ROOM-OLD', playerId: 'p1', sessionToken: 'expired-token'};
+  const {get, message, storage} = setup('Villager', saved);
+
+  message({type: 'CommandRejected', requestId: null, code: 'INVALID_SESSION',
+    message: 'Session is no longer valid.'});
+
+  assert.equal(storage.has('werewolf-session'), false);
+  assert.equal(get('join-section').hidden, false);
+  assert.equal(get('lobby-section').hidden, true);
+  assert.equal(get('message').textContent, '');
+});
+
 test('Mỗi người có thể tự rời phòng và quay về màn hình đầu sau GameOver', () => {
   const {get, message, connection, storage} = setup();
   storage.set('werewolf-session', JSON.stringify({roomId: 'R', playerId: 'p1'}));
@@ -259,6 +272,24 @@ test('Chỉ hiển thị bảng Voting sau khi Server chuyển đúng sang Votin
     players, hasVoted: false, canShoot: false, resolved: false, result: null});
   assert.equal(get('voting-section').hidden, false);
   assert.equal(get('voting-title').textContent, 'Bỏ phiếu · Vòng 1');
+});
+
+test('Kết quả soi vẫn hiện khi Tiên Tri là người cuối cùng và Server chuyển sang Day', () => {
+  const {get, message, players} = setup('Seer');
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 1,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+
+  message({type: 'SeerResult', roomId: 'R', team: 'Wolves'});
+  message({type: 'PhaseChanged', roomId: 'R', phase: 'Day'});
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Day', day: 1,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+
+  assert.equal(get('seer-day-result-panel').hidden, false);
+  assert.match(get('seer-day-result-text').textContent, /phe Sói/);
+
+  message({type: 'PhaseChanged', roomId: 'R', phase: 'Night'});
+  assert.equal(get('seer-day-result-panel').hidden, true,
+    'Đêm mới phải xóa kết quả soi của đêm trước');
 });
 
 test('Nút bỏ qua thảo luận chờ đủ người sống rồi Server mới mở Voting', () => {

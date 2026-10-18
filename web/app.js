@@ -138,6 +138,8 @@ const el = {
   chatPublicTab: document.querySelector("#chat-public-tab"),
   chatWolvesTab: document.querySelector("#chat-wolves-tab"),
   chatHeading: document.querySelector("#chat-heading"),
+  seerDayResultPanel: document.querySelector("#seer-day-result-panel"),
+  seerDayResultText: document.querySelector("#seer-day-result-text"),
   dayClock: document.querySelector("#day-clock"),
   dayClockLabel: document.querySelector("#day-clock-label"),
   dayClockValue: document.querySelector("#day-clock-value"),
@@ -934,6 +936,15 @@ function renderDay() {
   el.daySection.hidden = !inGame;
   if (!inGame) return;
 
+  const showSeerDayResult = state.phase === "Day" &&
+    state.selfRole === "Seer" && state.seerResult !== null;
+  el.seerDayResultPanel.hidden = !showSeerDayResult;
+  if (showSeerDayResult) {
+    const teamName = state.seerResult === "Wolves" ? "Sói" : "Dân Làng";
+    el.seerDayResultText.textContent =
+      `Kết quả lượt soi đêm vừa rồi: người bạn chọn thuộc phe ${teamName}.`;
+  }
+
   const isWolf = state.selfRole === "Werewolf";
   if (!isWolf && state.chatChannel === "WolvesNight") state.chatChannel = "PublicDay";
   el.chatWolvesTab.hidden = !isWolf;
@@ -1195,7 +1206,8 @@ function handlePhaseChanged(phase) {
   if (phase !== "Night") {
     state.nightActionDone = false;
     state.nightMessage = "";
-    state.seerResult = null;
+    // Giữ kết quả riêng của Tiên Tri khi Night chuyển sang Day để họ kịp xem.
+    // Kết quả chỉ bị xóa ở nhánh bắt đầu Night mới phía trên.
     state.wolfVotesSubmitted = 0;
     state.wolfVotesTotal = 0;
     state.wolfTargetLocked = false;
@@ -1550,9 +1562,12 @@ function handleServerMessage(message) {
 
     case "CommandRejected":
       if (message.code === "INVALID_SESSION") {
+        // Token trong localStorage có thể thuộc một RoomRuntime đã được dọn khi
+        // người cuối cùng rời phòng hoặc khi Server khởi động lại. Đây là trạng
+        // thái bình thường lúc mở lại trang: quên phiên cũ và hiện form vào phòng.
         clearSavedSession();
         resetRoomState();
-        state.error = "Phiên cũ không còn hợp lệ. Hãy tham gia lại phòng.";
+        state.error = "";
         break;
       }
       if (

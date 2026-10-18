@@ -175,7 +175,8 @@ Mở `http://localhost:5500`. Server game lắng nghe WebSocket ở cổng 8080;
 
 ## Trạng thái xác nhận gần nhất
 
-- `test/T07UiSpec.cjs`: 24/24 trường hợp PASS.
+- `test/T07UiSpec.cjs`: 26/26 trường hợp PASS, gồm xử lý token reconnect đã hết hạn
+  và giữ kết quả soi riêng của Tiên Tri khi đêm chuyển ngay sang thảo luận.
 - `t07-win-test`: bao gồm test thành viên/Host tự rời phòng tại GameOver.
 - `protocol-lobby-test`: kiểm tra JSON Lobby và `LeaveGame`.
 - `cabal test all --enable-tests --test-show-details=direct`: toàn bộ 14 test suite PASS.

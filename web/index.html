@@ -9,9 +9,9 @@
     href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
     rel="stylesheet"
   >
-  <link rel="stylesheet" href="style.css?ui=20261016d">
+  <link rel="stylesheet" href="style.css?ui=20261018a">
   <script src="avatar.js?ui=20261014b" defer></script>
-  <script src="app.js?ui=20261016d" defer></script>
+  <script src="app.js?ui=20261018a" defer></script>
 </head>
 <body>
   <div id="twinkling-stars" class="twinkling-stars" aria-hidden="true"></div>
@@ -616,6 +616,16 @@
         <section id="day-section" class="lobby-card" hidden>
           <p class="section-label">TRÒ CHUYỆN</p>
           <h2 id="chat-heading">Chat chung · Ngày 1</h2>
+          <div
+            id="seer-day-result-panel"
+            class="night-result-panel seer-day-result mb-3"
+            role="status"
+            aria-live="polite"
+            hidden
+          >
+            <p class="section-label">KẾT QUẢ SOI RIÊNG TƯ</p>
+            <p id="seer-day-result-text"></p>
+          </div>
           <div id="day-clock" class="day-clock" role="timer"
             aria-label="Thời gian thảo luận còn lại" hidden>
             <span id="day-clock-label" class="day-clock-label">Thời gian thảo luận</span>

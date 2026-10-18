@@ -1026,6 +1026,11 @@ body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
   line-height: 1.7;
 }
 
+.seer-day-result {
+  margin-top: 18px;
+  box-shadow: 0 12px 30px rgba(19, 74, 67, 0.18);
+}
+
 /* Specific role accents */
 
 #wolf-action-panel {
