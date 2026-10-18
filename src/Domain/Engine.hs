@@ -85,6 +85,17 @@ leavePlayer state pid = do
       newState = state
         { gamePlayers = remaining
         , gameHost = newHost
+        -- Lobby vốn chưa có các dữ liệu này. Ở GameOver cần bỏ các tham chiếu
+        -- tới người đã rời để state còn lại tiếp tục thỏa invariant.
+        , gameVotes = filter (\(actor, target) -> actor /= pid && target /= pid)
+            (gameVotes state)
+        , gameDiscussionSkips = filter (/= pid) (gameDiscussionSkips state)
+        , gameNightActions = filter ((/= pid) . fst) (gameNightActions state)
+        , gamePendingReveals = filter (/= pid) (gamePendingReveals state)
+        , gamePendingHunter =
+            if gamePendingHunter state == Just pid
+              then Nothing
+              else gamePendingHunter state
         }
       events =
         [PlayerLeft pid] ++
@@ -487,7 +498,10 @@ applyCommand
   -> Command
   -> Either GameError (GameState, [DomainEvent])
 applyCommand state command
-  | gamePhase state == GameOver = Left GameAlreadyOver
+  | gamePhase state == GameOver =
+      case command of
+        Leave _ -> applyLobbyCommand state command
+        _ -> Left GameAlreadyOver
   | otherwise =
       case command of
         Join _ _ -> applyLobbyCommand state command

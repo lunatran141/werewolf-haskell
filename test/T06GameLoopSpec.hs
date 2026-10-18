@@ -17,7 +17,11 @@ import Control.Concurrent.STM
   )
 import Control.Exception (bracket)
 import Domain.Types
-import Server.GameLoop (processNextLobbyCommand, runGameLoopWithPhaseTimeouts)
+import Server.GameLoop
+  ( applyInternalCommand
+  , processNextLobbyCommand
+  , runGameLoopWithPhaseTimeouts
+  )
 import Server.Room
   ( QueuedCommand(..)
   , RoomRuntime(..)
@@ -105,3 +109,22 @@ main = hspec $ describe "T06 GameLoop Vote" $ do
     result `shouldBe` Left DuplicateRequest
     readTVarIO (roomVersion room) `shouldReturn` 1
     atomically (isEmptyTChan updates) `shouldReturn` True
+
+  it "Ket qua Voting va nguoi chet duoc luu vao lich su chat cong khai" $ do
+    room <- newRoomRuntime "ROOM-HISTORY"
+    updates <- atomically (dupTChan (roomUpdates room))
+    atomically (writeTVar (roomState room) votingState {gameVotes = [("p1", "p7")]})
+
+    result <- atomically (applyInternalCommand room ResolveVoting)
+    fmap gamePhase result `shouldBe` Right Night
+    update <- atomically (readTChan updates)
+    case updateChatRecord update of
+      Nothing -> expectationFailure "Phai luu thong bao ket qua Voting"
+      Just record -> do
+        chatDay record `shouldBe` 1
+        chatChannel record `shouldBe` PublicDay
+        chatSenderId record `shouldBe` "__system__"
+        chatText record `shouldContain` "Kết quả bỏ phiếu vòng 1"
+        chatText record `shouldContain` "Nguoi p7"
+    history <- readTVarIO (roomChatHistory room)
+    history `shouldBe` maybe [] pure (updateChatRecord update)

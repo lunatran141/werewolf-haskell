@@ -58,7 +58,7 @@ main = hspec $ do
             , gamePendingHunter = Just "p1", gamePendingReveals = ["p1"]
             , gameVotes = [("p1", "p2")], gameVotingResolved = True
             }
-          players = [VotingPlayerView "p1" "Một" True, VotingPlayerView "p2" "Hai" True]
+          players = [VotingPlayerView "p1" "Một" False, VotingPlayerView "p2" "Hai" True]
       votingSnapshot "R" "p2" state `shouldBe` MsgVotingSnapshot "R" Voting 1 players False False True Nothing
       votingSnapshot "R" "p1" state `shouldBe` MsgVotingSnapshot "R" Voting 1 players True True True Nothing
 
