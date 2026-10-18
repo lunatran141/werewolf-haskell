@@ -137,6 +137,8 @@ const el = {
   chatPublicTab: document.querySelector("#chat-public-tab"),
   chatWolvesTab: document.querySelector("#chat-wolves-tab"),
   chatHeading: document.querySelector("#chat-heading"),
+  seerDayResultPanel: document.querySelector("#seer-day-result-panel"),
+  seerDayResultText: document.querySelector("#seer-day-result-text"),
   dayClock: document.querySelector("#day-clock"),
   dayClockLabel: document.querySelector("#day-clock-label"),
   dayClockValue: document.querySelector("#day-clock-value"),
@@ -151,7 +153,9 @@ const el = {
   resultSection: document.querySelector("#result-section"),
   resultTitle: document.querySelector("#result-title"),
   resultMessage: document.querySelector("#result-message"),
-  revealedRoleList: document.querySelector("#revealed-role-list")
+  revealedRoleList: document.querySelector("#revealed-role-list"),
+  returnHomeButton: document.querySelector("#return-home-button"),
+  returnHomeStatus: document.querySelector("#return-home-status")
 };
 
 const roleNames = {
@@ -509,7 +513,8 @@ function canChooseTarget() {
 
 function renderVoting() {
   // Không dựng form bỏ phiếu trong Night/Day: chỉ Server được quyền mở Voting.
-  const active = state.selfPlayerId !== null && state.phase === "Voting" && voting.phase === "Voting";
+  const active = state.connected && state.selfPlayerId !== null &&
+    state.phase === "Voting" && voting.phase === "Voting";
   voteEl["voting-section"].hidden = !active;
   renderVoteClock();
   el.readyButton.hidden = active;
@@ -650,7 +655,7 @@ function canStartGame() {
 }
 
 function renderLobby() {
-  const inRoom = state.selfPlayerId !== null;
+  const inRoom = state.connected && state.selfPlayerId !== null;
   const inLobby = state.phase === "Lobby";
   const busy = state.pending !== null;
 
@@ -760,7 +765,7 @@ function renderNightTargets() {
 }
 
 function renderNight() {
-  const inRoom = state.selfPlayerId !== null;
+  const inRoom = state.connected && state.selfPlayerId !== null;
   const isNight = state.phase === "Night";
 
   el.nightSection.hidden = !inRoom || !isNight;
@@ -881,8 +886,10 @@ function renderNight() {
 
 // T06: Một bảng Hunter dùng chung cho Night và Voting, không phụ thuộc panel Night.
 function renderHunter() {
-  const active = state.selfPlayerId !== null && state.selfRole === "Hunter" &&
-    (state.phase === "Night" || state.hunterPending);
+  // Vai Thợ Săn đã có thẻ chung như các vai khác trong Night. Chỉ mở thẻ
+  // hành động độc lập khi Server thực sự cấp quyền bắn sau lúc bị loại.
+  const active = state.connected && state.selfPlayerId !== null && state.selfRole === "Hunter" &&
+    state.hunterPending;
   el.hunterPanel.hidden = !active;
   const allowed = active && state.connected && state.pending === null &&
     state.hunterPending && !state.hunterActionDone && ["Night", "Voting"].includes(state.phase);
@@ -900,7 +907,13 @@ function renderHunter() {
 }
 
 function render() {
-    document.body.dataset.phase = state.phase;
+  document.body.dataset.phase = state.phase;
+  document.body.classList.toggle("phase-day", state.phase === "Day");
+  document.body.classList.toggle("phase-night", state.phase === "Night");
+  document.body.classList.toggle("phase-voting", state.phase === "Voting");
+  document.body.classList.toggle("phase-game-over", state.phase === "GameOver");
+  document.body.classList.toggle("hunter-pending", state.hunterPending === true);
+
   el.status.textContent = state.connected
     ? "Đã kết nối Server"
     : "Mất kết nối Server";
@@ -919,9 +932,18 @@ function render() {
 }
 
 function renderDay() {
-  const inGame = state.selfPlayerId !== null && state.phase !== "Lobby";
+  const inGame = state.connected && state.selfPlayerId !== null && state.phase !== "Lobby";
   el.daySection.hidden = !inGame;
   if (!inGame) return;
+
+  const showSeerDayResult = state.phase === "Day" &&
+    state.selfRole === "Seer" && state.seerResult !== null;
+  el.seerDayResultPanel.hidden = !showSeerDayResult;
+  if (showSeerDayResult) {
+    const teamName = state.seerResult === "Wolves" ? "Sói" : "Dân Làng";
+    el.seerDayResultText.textContent =
+      `Kết quả lượt soi đêm vừa rồi: người bạn chọn thuộc phe ${teamName}.`;
+  }
 
   const isWolf = state.selfRole === "Werewolf";
   if (!isWolf && state.chatChannel === "WolvesNight") state.chatChannel = "PublicDay";
@@ -968,6 +990,12 @@ function renderDay() {
     chat.channel === state.chatChannel).sort((a, b) => a.sequence - b.sequence);
   for (const chat of visible) {
     const line = document.createElement("p");
+    if (chat.playerId === "__system__") {
+      line.className = "chat-system-message";
+      line.textContent = chat.message;
+      el.chatMessages.appendChild(line);
+      continue;
+    }
     const author = document.createElement("strong");
     author.textContent = `${getPlayerName(chat.playerId)}: `;
     line.append(author, document.createTextNode(chat.message));
@@ -997,7 +1025,7 @@ function renderDay() {
 }
 
 function renderResult() {
-  const isGameOver = state.selfPlayerId !== null && state.phase === "GameOver";
+  const isGameOver = state.connected && state.selfPlayerId !== null && state.phase === "GameOver";
   el.resultSection.hidden = !isGameOver;
   if (!isGameOver) return;
 
@@ -1010,6 +1038,14 @@ function renderResult() {
     ["Ván chơi kết thúc", "Server đã kết thúc ván chơi."];
   el.resultTitle.textContent = title;
   el.resultMessage.textContent = message;
+
+  el.returnHomeButton.hidden = false;
+  el.returnHomeButton.disabled = !state.connected || state.pending !== null;
+  el.returnHomeButton.textContent = state.pending?.type === "LeaveGame"
+    ? "Đang rời phòng..."
+    : "Rời phòng và quay lại";
+  el.returnHomeStatus.textContent =
+    "Bạn có thể tạo phòng mới hoặc tham gia một phòng khác.";
 
   el.revealedRoleList.replaceChildren();
   for (const [playerId, info] of Object.entries(state.revealedRoles)) {
@@ -1196,7 +1232,8 @@ function handlePhaseChanged(phase) {
   if (phase !== "Night") {
     state.nightActionDone = false;
     state.nightMessage = "";
-    state.seerResult = null;
+    // Giữ kết quả riêng của Tiên Tri khi Night chuyển sang Day để họ kịp xem.
+    // Kết quả chỉ bị xóa ở nhánh bắt đầu Night mới phía trên.
     state.wolfVotesSubmitted = 0;
     state.wolfVotesTotal = 0;
     state.wolfTargetLocked = false;
@@ -1226,7 +1263,14 @@ function receiveChat(chat, showBubble = true) {
     playerId, message
   });
 
-  if (showBubble && state.players.some(player => player.playerId === playerId)) {
+  // Khi Server vừa chốt Voting, giữ khung chat ở ngày vừa kết thúc để người
+  // chơi nhìn thấy ngay kết quả trong lúc chuyển sang Night kế tiếp.
+  if (showBubble && playerId === "__system__" && channel === "PublicDay") {
+    state.chatDay = day;
+  }
+
+  if (showBubble && playerId !== "__system__" &&
+      state.players.some(player => player.playerId === playerId)) {
     state.chatBubbles[playerId] = message;
     if (typeof clearTimeout === "function" && chatBubbleTimers.has(playerId)) {
       clearTimeout(chatBubbleTimers.get(playerId));
@@ -1544,9 +1588,12 @@ function handleServerMessage(message) {
 
     case "CommandRejected":
       if (message.code === "INVALID_SESSION") {
+        // Token trong localStorage có thể thuộc một RoomRuntime đã được dọn khi
+        // người cuối cùng rời phòng hoặc khi Server khởi động lại. Đây là trạng
+        // thái bình thường lúc mở lại trang: quên phiên cũ và hiện form vào phòng.
         clearSavedSession();
         resetRoomState();
-        state.error = "Phiên cũ không còn hợp lệ. Hãy tham gia lại phòng.";
+        state.error = "";
         break;
       }
       if (
@@ -1665,6 +1712,12 @@ el.readyButton.addEventListener("click", () => {
 
 el.leaveButton.addEventListener("click", () => {
   sendCommand("LeaveGame");
+});
+
+el.returnHomeButton.addEventListener("click", () => {
+  if (state.phase === "GameOver" && state.selfPlayerId !== null) {
+    sendCommand("LeaveGame");
+  }
 });
 
 // T06: Chặn bấm lặp ngay ở UI; payload không chứa ID người gửi hay vai.

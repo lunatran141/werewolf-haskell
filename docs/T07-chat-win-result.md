@@ -34,6 +34,9 @@ T07 không cho trình duyệt tự quyết định vai trò, mục tiêu hợp l
 - Tin nhắn rỗng hoặc dài hơn 300 ký tự bị từ chối.
 - Mỗi tin có `roomId`, `day`, `channel`, `messageId`, `sequence`, `senderId` và `text`.
 - Server lưu lịch sử theo phòng; UI nhóm lịch sử theo Ngày 1, Ngày 2... và theo kênh.
+- Khi Voting được chốt, Server lưu một tin hệ thống chứa số vòng, bảng phiếu và
+  người bị loại; lượt bắn Thợ săn và danh sách người chết cũng được lưu. Vì vậy
+  đổi sang đêm/vòng mới hoặc reconnect vẫn xem lại được trong chat ngày cũ.
 - UI dùng `messageId`/`sequence` để giữ đúng thứ tự và không hiển thị trùng tin.
 - Tin mới hiện thành bong bóng trên ô người gửi rồi tự ẩn; snapshot lịch sử cũ không tạo bong bóng mới.
 - Snapshot chat Sói chỉ được lọc và gửi cho Sói còn sống.
@@ -54,6 +57,16 @@ T07 không cho trình duyệt tự quyết định vai trò, mục tiêu hợp l
 - Voting có 60 giây; hết giờ Server tự chốt kể cả khi chưa đủ phiếu.
 - Đồng hồ dùng thời hạn từ Server và không tự reset khi nhận snapshot mới hoặc reconnect.
 - UI chỉ mở nút chat, chọn mục tiêu và gửi hành động ở đúng phase.
+- Bảng Voting mở ngay từ Voting vòng 1; số vòng lấy trực tiếp từ snapshot Server.
+
+### Rời phòng sau khi kết thúc
+
+- Khi ván kết thúc, mọi người chơi đều có nút **Rời phòng và quay lại**.
+- Mỗi người tự rời phòng; thao tác này không reset hoặc bắt những người còn lại chơi tiếp.
+- Nếu Host rời, Server chuyển Host cho người còn lại; nếu người cuối cùng rời,
+  RoomRuntime được dọn khỏi registry.
+- Trình duyệt xóa session phòng cũ và trở về form ban đầu để người chơi tự tạo
+  phòng mới hoặc tham gia một phòng khác.
 
 ### Kết quả ván chơi
 
@@ -162,11 +175,12 @@ Mở `http://localhost:5500`. Server game lắng nghe WebSocket ở cổng 8080;
 
 ## Trạng thái xác nhận gần nhất
 
-- `test/T07UiSpec.cjs`: 21/21 trường hợp PASS.
-- `t07-win-test`: bộ test đã biên dịch chạy 41/41 trường hợp PASS.
-- `protocol-lobby-test`: bộ test đã biên dịch chạy 46/46 trường hợp PASS.
+- `test/T07UiSpec.cjs`: 26/26 trường hợp PASS, gồm xử lý token reconnect đã hết hạn
+  và giữ kết quả soi riêng của Tiên Tri khi đêm chuyển ngay sang thảo luận.
+- `t07-win-test`: bao gồm test thành viên/Host tự rời phòng tại GameOver.
+- `protocol-lobby-test`: kiểm tra JSON Lobby và `LeaveGame`.
+- `cabal test all --enable-tests --test-show-details=direct`: toàn bộ 14 test suite PASS.
 - `git diff --check`: không có lỗi whitespace; Windows có thể cảnh báo chuyển LF thành CRLF.
-- Cần chạy lại `cabal test all` sau khi Cabal trên máy hoạt động bình thường để có bằng chứng clean build cuối cùng trước merge PR.
 
 ## Phối hợp và giới hạn
 

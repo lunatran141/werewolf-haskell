@@ -72,6 +72,34 @@ testState phase pendingHunter roster =
 main :: IO ()
 main =
   hspec $ do
+    describe "T07 - moi nguoi tu roi phong sau GameOver" $ do
+      let roster =
+            [ (Werewolf, Alive), (Werewolf, Dead)
+            , (Villager, Alive), (Villager, Dead)
+            , (Seer, Alive), (Guard, Alive), (Witch, Alive), (Hunter, Dead)
+            ]
+          roles = map fst roster
+          finished = (testState GameOver Nothing roster)
+            { gameConfiguredRoles = roles
+            , gameResult = Just (Winner Village)
+            }
+
+      it "thanh vien khong phai Host cung tu roi duoc" $ do
+        let Right (next, events) = applyCommand finished (Leave "p2")
+        map playerId (gamePlayers next) `shouldNotContain` ["p2"]
+        gameHost next `shouldBe` "p1"
+        gamePhase next `shouldBe` GameOver
+        events `shouldBe` [PlayerLeft "p2"]
+
+      it "Host roi thi chuyen Host cho nguoi con lai" $ do
+        let Right (next, events) = applyCommand finished (Leave "p1")
+        gameHost next `shouldBe` "p2"
+        events `shouldBe` [PlayerLeft "p1", HostChanged "p2"]
+
+      it "khong cho roi giua van dang choi" $ do
+        applyCommand (finished {gamePhase = Day, gameResult = Nothing}) (Leave "p1")
+          `shouldBe` Left WrongPhase
+
     describe "T07 - bo nho lich su chat cua phong" $ do
       it "phong moi co lich su rong va sequence bat dau tu 1" $ do
         room <- newRoomRuntime "ROOM-CHAT"
