@@ -16,7 +16,9 @@ RUN apt-get update \
     && apt-get install --no-install-recommends -y ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 app
+WORKDIR /app
 COPY --from=build /out/werewolf-server /usr/local/bin/werewolf-server
+COPY web ./web
 USER app
 ENV APP_PORT=8080
 EXPOSE 8080

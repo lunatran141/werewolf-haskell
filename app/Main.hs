@@ -37,6 +37,8 @@ startRoomWorker supervisor room = do
 
 app :: RoomRegistry -> (RoomRuntime -> IO ()) -> Application
 app registry startWorker request respond
+  | pathInfo request == ["health"] =
+      healthApp request respond
   | pathInfo request == ["ws"] =
       websocketsOr WS.defaultConnectionOptions
         (webSocketApp registry startWorker)
