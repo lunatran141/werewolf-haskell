@@ -7,6 +7,8 @@ import Network.HTTP.Types (status200)
 import Network.Wai (Application, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (run)
 import Network.Wai.Handler.WebSockets (websocketsOr)
+import Network.Wai.Application.Static
+  (defaultFileServerSettings, staticApp)
 import qualified Network.WebSockets as WS
 import Server.GameLoop (runLobbyLoop)
 import Server.Room (RoomRegistry, RoomRuntime(..), newRoomRegistry)
@@ -35,13 +37,15 @@ startRoomWorker supervisor room = do
 
 app :: RoomRegistry -> (RoomRuntime -> IO ()) -> Application
 app registry startWorker request respond
+  | pathInfo request == ["health"] =
+      healthApp request respond
   | pathInfo request == ["ws"] =
       websocketsOr WS.defaultConnectionOptions
         (webSocketApp registry startWorker)
         healthApp
         request respond
   | otherwise =
-      healthApp request respond
+      staticApp (defaultFileServerSettings "web") request respond
 
 healthApp :: Application
 healthApp _ respond =

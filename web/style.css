@@ -1140,3 +1140,51 @@ body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
 .night-result-panel[hidden] {
   display: none !important;
 }
+
+body[data-phase="Day"],
+body[data-phase="Voting"] {
+  background:
+    radial-gradient(circle at 20% 18%, #9572bb 0, transparent 35%),
+    radial-gradient(circle at 82% 70%, #5b91b6 0, transparent 40%),
+    linear-gradient(145deg, #FFFACD, #FFE4E1);
+}
+
+body[data-phase="Day"] .twinkling-stars,
+body[data-phase="Voting"] .twinkling-stars {
+  opacity: 0.12;
+}
+.day-transition {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: rgba(255, 239, 179, 0.12);
+  animation: day-overlay 1.6s ease-out forwards;
+}
+
+.day-transition-sun {
+  font-size: clamp(110px, 22vw, 240px);
+  line-height: 1;
+  filter: drop-shadow(0 0 35px rgba(255, 216, 91, 0.8));
+  animation: day-sun 1.6s ease-out forwards;
+}
+
+@keyframes day-sun {
+  0%   { opacity: 0; transform: translateY(70px) scale(0.6); }
+  25%  { opacity: 1; transform: translateY(0) scale(1); }
+  70%  { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-50px) scale(1.1); }
+}
+
+@keyframes day-overlay {
+  0%, 70% { opacity: 1; }
+  100%    { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .day-transition {
+    display: none;
+  }
+}
