@@ -1,5 +1,4 @@
-const WS_URL = "ws://localhost:8080/ws";
-let socket = null;
+const WS_URL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;let socket = null;
 let requestNumber = 0;
 const VOTE_DURATION_MS = 60_000;
 const DAY_DURATION_MS = 180_000;
@@ -901,6 +900,7 @@ function renderHunter() {
 }
 
 function render() {
+    document.body.dataset.phase = state.phase;
   el.status.textContent = state.connected
     ? "Đã kết nối Server"
     : "Mất kết nối Server";
@@ -1119,6 +1119,29 @@ function sendHunterAction(choice) {
   sendCommand("HunterAction", { choice });
 }
 
+let dayTransitionTimer = null;
+
+function showDayTransition() {
+  document.querySelector(".day-transition")?.remove();
+  clearTimeout(dayTransitionTimer);
+
+  const overlay = document.createElement("div");
+  overlay.className = "day-transition";
+  overlay.setAttribute("aria-hidden", "true");
+
+  const sun = document.createElement("span");
+  sun.className = "day-transition-sun";
+  sun.textContent = "☀️";
+
+  overlay.appendChild(sun);
+  document.body.appendChild(overlay);
+
+  dayTransitionTimer = setTimeout(() => {
+    overlay.remove();
+    dayTransitionTimer = null;
+  }, 1600);
+}
+
 function handlePhaseChanged(phase) {
   const previousPhase = state.phase;
 
@@ -1132,6 +1155,9 @@ function handlePhaseChanged(phase) {
   }
   state.phase = phase;
   voting.phase = phase;
+  if (previousPhase === "Night" && phase === "Day") {
+  showDayTransition();
+}
 
   if (phase === "Day" && previousPhase !== "Day") {
     state.discussionSkipsSubmitted = 0;
