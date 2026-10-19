@@ -320,14 +320,9 @@ processPlayerCommand room = do
   accepted <- readTVar (roomAcceptedRequests room)
 
   let key = (queuedActorId request, queuedRequestId request)
-      tracked = case queuedCommand request of
-        NightAction _ _ -> True
-        Vote _ _ -> True
-        ResolveHunter _ _ -> True
-        Chat _ _ -> True
-        ChatInChannel _ _ _ -> True
-        SkipDiscussion _ -> True
-        _ -> False
+      -- T09: requestId là idempotency key cho mọi lệnh từ client.
+      -- Resolve nội bộ không đi qua queue này.
+      tracked = True
       result =
         if tracked && key `elem` accepted then Left DuplicateRequest
         else if actorMatches request

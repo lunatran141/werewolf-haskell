@@ -6,9 +6,11 @@ module Server.Connection
   , newOutboundQueue
   , newOutboundQueueWithCapacity
   , readOutbound
+  , readOutboundRecoverable
   , tryReadOutbound
   , sendBounded
   , writeBoundedDropOldest
+  , enqueueOutbound
   , tryEnqueueRoomCommand
   , runSupervisedConnection
   ) where
@@ -19,6 +21,10 @@ import Control.Concurrent.STM
   , isFullTBQueue
   , newTBQueueIO
   , readTBQueue
+  , newTVarIO
+  , readTVar
+  , writeTVar
+  , TVar
   , tryReadTBQueue
   , writeTBQueue
   )
@@ -35,7 +41,10 @@ import Server.Supervisor
 
 -- | Hàng đợi thông điệp gửi ra WebSocket có giới hạn sức chứa (Bounded Queue)
 -- để ngăn slow consumer làm tăng bộ nhớ vô hạn.
-type OutboundQueue = TBQueue ServerMessage
+data OutboundQueue = OutboundQueue
+  { outboundMessages :: TBQueue ServerMessage
+  , outboundOverflowed :: TVar Bool
+  }
 
 -- | Sức chứa mặc định cho hàng đợi gửi của mỗi client.
 defaultOutboundCapacity :: Natural
@@ -48,25 +57,36 @@ newOutboundQueue = newOutboundQueueWithCapacity defaultOutboundCapacity
 -- | Tạo hàng đợi gửi với sức chứa tùy chỉnh (tối thiểu 1).
 newOutboundQueueWithCapacity :: Natural -> IO OutboundQueue
 newOutboundQueueWithCapacity capacity =
-  newTBQueueIO (max 1 capacity)
+  OutboundQueue
+    <$> newTBQueueIO (max 1 capacity)
+    <*> newTVarIO False
 
 -- | Đọc một thông điệp từ hàng đợi gửi (chặn trong STM nếu rỗng).
 readOutbound :: OutboundQueue -> STM ServerMessage
-readOutbound = readTBQueue
+readOutbound = readTBQueue . outboundMessages
+
+-- | Lấy message, hoặc báo worker gửi socket đóng nếu hàng đợi từng tràn.
+-- Khi tràn, đóng kết nối buộc client reconnect và nhận snapshot đầy đủ.
+readOutboundRecoverable :: OutboundQueue -> STM (Maybe ServerMessage)
+readOutboundRecoverable queue = do
+  overflowed <- readTVar (outboundOverflowed queue)
+  if overflowed
+    then pure Nothing
+    else Just <$> readTBQueue (outboundMessages queue)
 
 -- | Đọc không chặn một thông điệp từ hàng đợi gửi.
 tryReadOutbound :: OutboundQueue -> STM (Maybe ServerMessage)
-tryReadOutbound = tryReadTBQueue
+tryReadOutbound = tryReadTBQueue . outboundMessages
 
 -- | Ghi thông điệp vào hàng đợi nếu chưa đầy.
 -- Trả về True nếu ghi thành công, False nếu hàng đợi đã đầy (backpressure).
 sendBounded :: OutboundQueue -> ServerMessage -> STM Bool
 sendBounded queue message = do
-  full <- isFullTBQueue queue
+  full <- isFullTBQueue (outboundMessages queue)
   if full
     then pure False
     else do
-      writeTBQueue queue message
+      writeTBQueue (outboundMessages queue) message
       pure True
 
 -- | Ghi thông điệp vào hàng đợi có giới hạn:
@@ -75,15 +95,24 @@ sendBounded queue message = do
 -- Trả về True nếu ghi bình thường, False nếu đã phải bỏ bớt 1 tin cũ.
 writeBoundedDropOldest :: OutboundQueue -> ServerMessage -> STM Bool
 writeBoundedDropOldest queue message = do
-  full <- isFullTBQueue queue
+  full <- isFullTBQueue (outboundMessages queue)
   if full
     then do
-      _ <- tryReadTBQueue queue
-      writeTBQueue queue message
+      _ <- tryReadTBQueue (outboundMessages queue)
+      writeTBQueue (outboundMessages queue) message
       pure False
     else do
-      writeTBQueue queue message
+      writeTBQueue (outboundMessages queue) message
       pure True
+
+-- | Không âm thầm bỏ event: khi đầy, đánh dấu kết nối cần reconnect để lấy snapshot.
+enqueueOutbound :: OutboundQueue -> ServerMessage -> STM Bool
+enqueueOutbound queue message = do
+  overflowed <- readTVar (outboundOverflowed queue)
+  full <- isFullTBQueue (outboundMessages queue)
+  if overflowed || full
+    then writeTVar (outboundOverflowed queue) True >> pure False
+    else writeTBQueue (outboundMessages queue) message >> pure True
 
 -- | Đưa lệnh của người chơi vào hàng đợi lệnh của phòng nếu hàng đợi chưa đầy.
 -- Trả về False ngay lập tức khi hàng đợi đầy (chống spam làm treo kết nối).

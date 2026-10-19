@@ -47,12 +47,14 @@ function setup() {
     send(data) { this.sent.push(JSON.parse(data)); }
   }
   const context = vm.createContext({WebSocket: Socket, console,
+    location: {protocol: 'http:', host: 'localhost'},
     Date: class extends Date { static now() { return now; } },
     setInterval(callback) { const id = nextIntervalId++; intervals.set(id, callback); return id; },
     clearInterval(id) { intervals.delete(id); },
+    setTimeout() { return nextIntervalId++; }, clearTimeout() {},
     localStorage: {getItem() { return null; }, setItem() {}}, document: {
     body: new Element(),
-    querySelector: selector => get(selector.slice(1)), getElementById: get,
+    querySelector: selector => selector.startsWith('#') ? get(selector.slice(1)) : null, getElementById: get,
     createElement: () => new Element()
   }});
   vm.runInContext(readFileSync(join(__dirname, '../web/avatar.js'), 'utf8'), context);

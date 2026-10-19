@@ -22,6 +22,7 @@ import Control.Concurrent.STM
   )
 import Control.Exception (SomeException, bracket, try)
 import Control.Monad (forM, forM_)
+import Data.Unique (hashUnique, newUnique)
 import Domain.Engine
   ( closeWolfVoting
   , completeNightTurn
@@ -72,6 +73,8 @@ import Server.Broadcast
   )
 import Server.Connection
   ( newOutboundQueueWithCapacity
+  , enqueueOutbound
+  , readOutboundRecoverable
   , sendBounded
   , tryEnqueueRoomCommand
   , tryReadOutbound
@@ -131,7 +134,9 @@ submitWithReq room reqId actor command = do
 
 -- Đưa một lệnh vào queue rồi chạy đúng một lượt GameLoop.
 submit :: RoomRuntime -> String -> Command -> IO (Either GameError GameState)
-submit room = submitWithReq room "req-test"
+submit room actor command = do
+  unique <- newUnique
+  submitWithReq room ("req-test-" ++ show (hashUnique unique)) actor command
 
 -- Gửi lệnh vào phòng khi đang có worker chạy nền và chờ kết quả.
 enqueueAndAwait :: RoomRuntime -> String -> String -> Command -> IO (Either GameError GameState)
@@ -581,6 +586,18 @@ e07ConcurrentStmSpec = describe "T08 E07 - Concurrent Commands via STM (9 Client
 e11IdempotencySpec :: Spec
 e11IdempotencySpec = describe "T08 E11 - Idempotency (Duplicate requestId)" $ do
 
+  it "requestId cung khong the ap dung lai lenh Join" $ do
+    room <- newRoomRuntime "ROOM-IDEM"
+    first <- submitWithReq room "join-once" "p-new" (Join "p-new" "New")
+    first `shouldSatisfy` either (const False) (const True)
+    versionAfterFirst <- readTVarIO (roomVersion room)
+    second <- submitWithReq room "join-once" "p-new" (Join "p-new" "New")
+    second `shouldBe` Left DuplicateRequest
+    versionAfterSecond <- readTVarIO (roomVersion room)
+    versionAfterSecond `shouldBe` versionAfterFirst
+    state <- readTVarIO (roomState room)
+    length (gamePlayers state) `shouldBe` 1
+
   it "Gui 2 lan cung (actorId, requestId) cho NightAction, ChatInChannel va Vote chi ap dung 1 lan" $ do
     (room, startUpdate) <- setupStartedNinePlayerRoom
     updates <- atomically (dupTChan (roomUpdates room))
@@ -752,6 +769,16 @@ e14BackpressureSpec = describe "T08 E14 - Backpressure & Bounded Queue" $ do
     m4 <- atomically (tryReadOutbound queue)
 
     (m1, m2, m3, m4) `shouldBe` (Just (msg "p3"), Just (msg "p4"), Just (msg "p5"), Nothing)
+
+  it "OutboundQueue bao overflow de connection reconnect va phuc hoi snapshot" $ do
+    queue <- newOutboundQueueWithCapacity 1
+    let first = MsgPlayerDied "ROOM-BP" "p1"
+        lost = MsgPlayerDied "ROOM-BP" "p2"
+    firstQueued <- atomically (enqueueOutbound queue first)
+    secondQueued <- atomically (enqueueOutbound queue lost)
+    next <- atomically (readOutboundRecoverable queue)
+
+    (firstQueued, secondQueued, next) `shouldBe` (True, False, Nothing)
 
 -- =============================================================================
 -- E17: Supervision & Worker Failure Cleanup

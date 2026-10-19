@@ -92,6 +92,8 @@ instance FromJSON VotingPlayerView where
 -- Tin Server gui ve Browser.
 data ServerMessage
   = MsgLobbySnapshot RoomId String String [PlayerView]
+  -- T09: Cursor versioned state phục vụ reconnect snapshot.
+  | MsgRoomVersion RoomId Int
   | MsgPlayerJoined RoomId PlayerView
   | MsgPlayerLeft RoomId String
   | MsgHostChanged RoomId String
@@ -509,6 +511,9 @@ instance FromJSON ServerMessage where
           <*> obj .: "hostPlayerId"
           <*> obj .: "players"
 
+      "RoomVersion" ->
+        MsgRoomVersion <$> obj .: "roomId" <*> obj .: "version"
+
       "PlayerJoined" ->
         MsgPlayerJoined
           <$> obj .: "roomId"
@@ -745,6 +750,13 @@ instance ToJSON ServerMessage where
           , "selfPlayerId" .= selfId
           , "hostPlayerId" .= hostId
           , "players" .= players
+          ]
+
+      MsgRoomVersion roomId version ->
+        object
+          [ "type" .= ("RoomVersion" :: String)
+          , "roomId" .= roomId
+          , "version" .= version
           ]
 
       MsgPlayerJoined roomId player ->

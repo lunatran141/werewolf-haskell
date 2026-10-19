@@ -27,10 +27,12 @@ const state = {
   connected: false,
   entranceMode: "join",
   roomId: null,
+  reconnecting: false,
   selfPlayerId: null,
   hostPlayerId: null,
   players: [],
   pending: null,
+  retryCommand: null,
   error: "",
   phase: "Lobby",
   selfRole: null,
@@ -200,6 +202,8 @@ const serverErrorMessages = {
   NotReady: "Bạn chưa ở trạng thái sẵn sàng.",
   AlreadySkippedDiscussion: "Bạn đã đồng ý bỏ qua lượt thảo luận này.",
   DuplicateRequest: "Yêu cầu này đã được xử lý trước đó.",
+  ServerBusy: "Máy chủ đang bận. Hãy thử lại.",
+  ServerTimeout: "Máy chủ xử lý quá lâu. Hãy thử lại yêu cầu này.",
   InvalidAppearance: "Ngoại hình đã chọn không hợp lệ.",
   ROOM_NOT_FOUND: "Không tìm thấy phòng.",
   NOT_JOINED: "Bạn chưa tham gia phòng.",
@@ -634,6 +638,7 @@ function resetRoomState() {
   state.hostPlayerId = null;
   state.players = [];
   state.pending = null;
+  state.retryCommand = null;
   resetNightState();
   Object.assign(voting, {phase: "Lobby", day: 0, players: [], hasVoted: false,
     canShoot: false, resolved: false, result: null, tally: [], summary: "", reveals: [],
@@ -1059,6 +1064,7 @@ function sendCommand(type, fields = {}) {
   if (state.pending !== null) {
     return;
   }
+  if (state.reconnecting) return;
 
   if (!socket || socket.readyState !== WebSocket.OPEN) {
     state.error = "Chưa kết nối được Server.";
@@ -1066,22 +1072,31 @@ function sendCommand(type, fields = {}) {
     return;
   }
 
-  const requestId = `req-${Date.now()}-${++requestNumber}`;
-
-  const command = {
+  const roomId = fields.roomId ?? state.roomId;
+  const retry = state.retryCommand;
+  const canReuseRequest = retry && retry.type === type && retry.roomId === roomId &&
+    JSON.stringify(Object.fromEntries(Object.entries(retry).filter(([key]) =>
+      !["type", "requestId", "roomId"].includes(key)))) === JSON.stringify(fields);
+  if (retry && !canReuseRequest) {
+    state.error = "Hãy thử lại yêu cầu đang chờ trước khi gửi yêu cầu khác.";
+    render();
+    return;
+  }
+  const command = canReuseRequest ? retry : {
     type,
-    requestId,
-    roomId: fields.roomId ?? state.roomId,
+    requestId: `req-${Date.now()}-${++requestNumber}`,
+    roomId,
     ...fields
   };
 
-  state.pending = { type, requestId };
+  state.pending = {type, requestId: command.requestId, command};
   state.error = "";
   render();
 
   try {
     socket.send(JSON.stringify(command));
   } catch {
+    state.retryCommand = command;
     state.pending = null;
     state.error = "Không gửi được yêu cầu. Hãy kiểm tra kết nối.";
     render();
@@ -1100,9 +1115,24 @@ function readSavedSession() {
 
 function saveSession(roomId, playerId, sessionToken) {
   try {
+    const previous = readSavedSession();
     localStorage.setItem(SESSION_STORAGE_KEY,
-      JSON.stringify({roomId, playerId, sessionToken}));
+      JSON.stringify({roomId, playerId, sessionToken,
+        lastVersion: previous?.roomId === roomId ? previous.lastVersion : 0}));
   } catch { /* Trình duyệt chặn localStorage: ván vẫn chơi được nhưng không tự nối lại. */ }
+}
+
+function saveRoomVersion(roomId, version) {
+  const saved = readSavedSession();
+  if (!saved || saved.roomId !== roomId || !Number.isSafeInteger(version) || version < 0) return;
+  const previousVersion = Number.isSafeInteger(saved.lastVersion) ? saved.lastVersion : 0;
+  if (!state.reconnecting && previousVersion > 0 && version > previousVersion + 1) return false;
+  try {
+    saved.lastVersion = Math.max(previousVersion, version);
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(saved));
+  } catch { /* Cursor không ảnh hưởng khả năng chơi nếu storage bị chặn. */ }
+  state.reconnecting = false;
+  return true;
 }
 
 function clearSavedSession() {
@@ -1289,6 +1319,16 @@ function handleServerMessage(message) {
   // Không áp dụng thông điệp của phòng khác vào UI đang mở.
   if (message.roomId && state.roomId && message.roomId !== state.roomId && message.type !== "LobbySnapshot") return;
   switch (message.type) {
+    case "RoomVersion":
+      if (saveRoomVersion(message.roomId, message.version) === false) {
+        socket.close();
+      } else if (state.retryCommand && state.pending === null && socket.readyState === WebSocket.OPEN) {
+        const command = state.retryCommand;
+        state.pending = {type: command.type, requestId: command.requestId, command};
+        socket.send(JSON.stringify(command));
+      }
+      break;
+
     case "VotingSnapshot":
       // Day và Voting cùng số vòng: phải xét cả chuyển phase để xóa tally cũ.
       if (message.phase === "Voting" && (voting.phase !== "Voting" || message.day !== voting.day)) {
@@ -1350,6 +1390,7 @@ function handleServerMessage(message) {
       if (message.requestId === state.pending?.requestId) {
         if (state.pending.type === "Chat") el.chatInput.value = "";
         state.pending = null;
+        state.retryCommand = null;
       }
       break;
 
@@ -1600,6 +1641,18 @@ function handleServerMessage(message) {
         message.requestId === null ||
         message.requestId === state.pending?.requestId
       ) {
+        if (message.code === "DuplicateRequest") {
+          if (state.pending?.type === "Chat") el.chatInput.value = "";
+          state.pending = null;
+          state.retryCommand = null;
+          break;
+        }
+        const failedCommand = state.pending?.command;
+        if (message.code === "ServerTimeout" && failedCommand) {
+          state.retryCommand = failedCommand;
+        } else if (failedCommand) {
+          state.retryCommand = null;
+        }
         const localizedError = localizedServerError(message);
         if (state.pending?.type === "NightAction") {
           state.nightMessage = localizedError;
@@ -1856,6 +1909,7 @@ function connectSocket() {
     state.error = "";
     const saved = readSavedSession();
     if (saved) {
+      state.reconnecting = true;
       const requestId = `reconnect-${Date.now()}-${++requestNumber}`;
       state.pending = {type: "Reconnect", requestId};
       socket.send(JSON.stringify({
@@ -1887,6 +1941,9 @@ function connectSocket() {
 
   socket.addEventListener("close", () => {
     state.connected = false;
+    if (state.pending?.command && readSavedSession()) {
+      state.retryCommand = state.pending.command;
+    }
     state.pending = null;
     state.error = readSavedSession()
       ? "Mất kết nối Server. Đang thử nối lại..."

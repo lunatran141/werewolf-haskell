@@ -31,6 +31,14 @@ jobs:
         run: cabal build all --enable-tests
       - name: Run all tests
         run: cabal test all --enable-tests --test-show-details=direct
+      - name: Set up Node.js for browser UI tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Check and test browser UI
+        run: |
+          node --check web/app.js
+          node --test test/T06UiSpec.cjs test/T07UiSpec.cjs
 
   docker:
     runs-on: ubuntu-latest

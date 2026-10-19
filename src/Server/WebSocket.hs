@@ -10,6 +10,8 @@ import Control.Concurrent.STM
 
   , dupTChan
 
+  , isEmptyTBQueue
+
   , newEmptyTMVarIO
 
   , readTChan
@@ -20,7 +22,6 @@ import Control.Concurrent.STM
 
   , takeTMVar
 
-  , writeTBQueue
 
   , writeTVar
 
@@ -33,11 +34,13 @@ import Control.Exception (finally)
 import Control.Monad (forM_, forever, void)
 
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Word (Word64)
 import Numeric (showHex)
 import GHC.Clock (getMonotonicTimeNSec)
 
 import Domain.RoleShuffle (shuffleRoles)
+import Domain.Night (wolfVictim)
 
 import Domain.Types
   ( Command(..)
@@ -48,6 +51,8 @@ import Domain.Types
   , PlayerId
   , Phase(..)
   , NightChoice(..)
+  , Role(..)
+  , teamOfRole
   )
 
 import Domain.Validation (expectedRoles)
@@ -95,9 +100,10 @@ import Server.Broadcast
 
 import Server.Connection
   ( OutboundQueue
+  , enqueueOutbound
   , newOutboundQueue
-  , readOutbound
-  , writeBoundedDropOldest
+  , readOutboundRecoverable
+  , tryEnqueueRoomCommand
   )
 
 import Server.GameLoop
@@ -119,6 +125,7 @@ import Server.Room
   )
 
 import Server.Supervisor (runIgnoringBenignSocketException)
+import System.Timeout (timeout)
 
 import System.Random (newStdGen, randomIO)
 
@@ -128,7 +135,7 @@ sendToClient :: OutboundQueue -> ServerMessage -> IO ()
 
 sendToClient outbound message =
 
-  void (atomically (writeBoundedDropOldest outbound message))
+  void (atomically (enqueueOutbound outbound message))
 
 isRoleAssignment :: DomainEvent -> Bool
 isRoleAssignment event =
@@ -176,23 +183,19 @@ submitCommand room requestId actor command = do
 
   reply <- newEmptyTMVarIO
 
-  atomically $
+  enqueued <- atomically $
+    tryEnqueueRoomCommand room QueuedCommand
+      { queuedRequestId = requestId
+      , queuedActorId = actor
+      , queuedCommand = command
+      , queuedReply = reply
+      }
 
-    writeTBQueue (roomCommands room)
-
-      QueuedCommand
-
-        { queuedRequestId = requestId
-
-        , queuedActorId = actor
-
-        , queuedCommand = command
-
-        , queuedReply = reply
-
-        }
-
-  atomically (takeTMVar reply)
+  if not enqueued
+    then pure (Left ServerBusy)
+    else do
+      response <- timeout 5000000 (atomically (takeTMVar reply))
+      pure (maybe (Left ServerTimeout) id response)
 
 -- Xu ly Leave va xoa phong rong duoi cung khoa Registry.
 
@@ -208,33 +211,28 @@ leaveAndPrune
 
   -> IO (Either GameError GameState)
 
-leaveAndPrune registry room requestId actor =
-
-  modifyMVar (registryRooms registry) $ \rooms -> do
-
-    currentState <- readTVarIO (roomState room)
-
-    if not (any ((== actor) . playerId) (gamePlayers currentState))
-
-      then pure (rooms, Left PlayerNotFound)
-
-      else do
-
-        result <- submitCommand room requestId actor (Leave actor)
-
-        let remainingRooms =
-
-              case result of
-
-                Right state | null (gamePlayers state) ->
-
-                  filter ((/= roomId room) . fst) rooms
-
-                _ ->
-
-                  rooms
-
-        pure (remainingRooms, result)
+leaveAndPrune registry room requestId actor = do
+  currentState <- readTVarIO (roomState room)
+  if not (any ((== actor) . playerId) (gamePlayers currentState))
+    then pure (Left PlayerNotFound)
+    else do
+      -- Không giữ khóa registry trong lúc chờ phản hồi của worker phòng.
+      result <- submitCommand room requestId actor (Leave actor)
+      case result of
+        Right state | null (gamePlayers state) ->
+          modifyMVar (registryRooms registry) $ \rooms -> do
+            registered <- case lookup (roomId room) rooms of
+              Just currentRoom | roomState currentRoom == roomState room -> do
+                latest <- readTVarIO (roomState currentRoom)
+                queueEmpty <- atomically (isEmptyTBQueue (roomCommands currentRoom))
+                pure (queueEmpty && null (gamePlayers latest))
+              _ -> pure False
+            let remainingRooms =
+                  if registered
+                    then filter ((/= roomId room) . fst) rooms
+                    else rooms
+            pure (remainingRooms, result)
+        _ -> pure result
 
 -- Chi gui event Lobby cho cac nguoi choi khac khi can.
 
@@ -301,7 +299,7 @@ beginSession
 
 beginSession room actor sessionRef outbound = do
 
-  let enqueueSTM = void . writeBoundedDropOldest outbound
+  let enqueueSTM = void . enqueueOutbound outbound
 
   updates <- atomically $ do
 
@@ -310,6 +308,7 @@ beginSession room actor sessionRef outbound = do
     state <- readTVar (roomState room)
 
     history <- readTVar (roomChatHistory room)
+    version <- readTVar (roomVersion room)
 
     enqueueSTM
 
@@ -325,6 +324,29 @@ beginSession room actor sessionRef outbound = do
 
     forM_ (wolfTeamMessage (roomId room) actor state)
       enqueueSTM
+
+    -- Phục hồi kết quả Night riêng tư đã phát trước khi phiên bị ngắt.
+    -- Chỉ người nhận vốn có quyền mới nhận được các thông điệp này.
+    case filter ((== actor) . playerId) (gamePlayers state) of
+      player : _ | gamePhase state == Night -> do
+        case playerRole player of
+          Just Werewolf | gameWolfVotingClosed state ->
+            enqueueSTM (MsgWolfTargetLocked (roomId room) (wolfVictim state))
+          Just Witch | gameWolfVotingClosed state ->
+            enqueueSTM (MsgWitchVictimNotice (roomId room) (wolfVictim state))
+          Just Seer ->
+            case [target | (seer, SeerTarget target) <- gameNightActions state, seer == actor] of
+              target : _ ->
+                case filter ((== target) . playerId) (gamePlayers state) of
+                  targetPlayer : _ ->
+                    case playerRole targetPlayer of
+                      Just targetRole -> enqueueSTM
+                        (MsgSeerResult (roomId room) (teamOfRole targetRole))
+                      Nothing -> pure ()
+                  [] -> pure ()
+              [] -> pure ()
+          _ -> pure ()
+      _ -> pure ()
 
     if gamePhase state /= Lobby
       then enqueueSTM
@@ -355,6 +377,8 @@ beginSession room actor sessionRef outbound = do
       then pure ()
       else enqueueSTM
         (chatHistorySnapshot (roomId room) actor state history)
+
+    enqueueSTM (MsgRoomVersion (roomId room) version)
 
     pure channel
 
@@ -420,6 +444,9 @@ beginSession room actor sessionRef outbound = do
           else pure ()
         sendPhaseTimeRemaining outbound room
       else pure ()
+
+    -- Cursor chỉ được lưu sau khi toàn bộ sự kiện/snapshot của version này đã vào queue.
+    sendToClient outbound (MsgRoomVersion (roomId room) (updateVersion update))
 
   writeIORef sessionRef (Just (room, broadcastThread))
 
@@ -732,18 +759,7 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
           let command = Join actor name
 
           found <- withMVar (registryRooms registry) $ \rooms ->
-
-            case lookup rid rooms of
-
-              Nothing ->
-
-                pure Nothing
-
-              Just room -> do
-
-                result <- submitCommand room requestId actor command
-
-                pure (Just (room, result))
+            pure (lookup rid rooms)
 
           case found of
 
@@ -753,8 +769,8 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
 
                 "Khong tim thay phong."
 
-            Just (room, result) ->
-
+            Just room -> do
+              result <- submitCommand room requestId actor command
               case result of
 
                 Left _ ->
@@ -781,20 +797,15 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
           let command = JoinWithAppearance actor name appearance
 
           found <- withMVar (registryRooms registry) $ \rooms ->
-            case lookup rid rooms of
-              Nothing ->
-                pure Nothing
-
-              Just room -> do
-                result <- submitCommand room requestId actor command
-                pure (Just (room, result))
+            pure (lookup rid rooms)
 
           case found of
             Nothing ->
               reject outbound requestId "ROOM_NOT_FOUND"
                 "Khong tim thay phong."
 
-            Just (room, result) ->
+            Just room -> do
+              result <- submitCommand room requestId actor command
               case result of
                 Left _ ->
                   sendToClient outbound
@@ -1039,11 +1050,16 @@ webSocketApp registry startWorker pending = do
 
   -- Moi connection co mot writer rieng, bo qua ngoai le dong socket thong thuong.
 
-  writerThread <- forkIO $ runIgnoringBenignSocketException $ forever $ do
-
-    message <- atomically (readOutbound outbound)
-
-    WS.sendTextData connection (encodeServerMessage message)
+  writerThread <- forkIO $ runIgnoringBenignSocketException $ let
+    writeNext = do
+      next <- atomically (readOutboundRecoverable outbound)
+      case next of
+        Just message -> do
+          WS.sendTextData connection (encodeServerMessage message)
+          writeNext
+        Nothing -> WS.sendClose connection
+          (BL8.pack "outbound queue overflow; reconnect for snapshot")
+    in writeNext
 
   let receiveLoop = runIgnoringBenignSocketException $ forever $ do
 

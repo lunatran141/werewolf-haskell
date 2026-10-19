@@ -227,6 +227,15 @@ lobbyError err =
     DuplicatePlayerId ->
       ("DUPLICATE_PLAYER_ID", "ID nguoi choi da ton tai.")
 
+    DuplicateRequest ->
+      ("DuplicateRequest", "Yêu cầu này đã được xử lý trước đó.")
+
+    ServerBusy ->
+      ("ServerBusy", "Máy chủ đang bận. Hãy thử lại.")
+
+    ServerTimeout ->
+      ("ServerTimeout", "Máy chủ xử lý quá lâu. Hãy thử lại yêu cầu này.")
+
     RoomFull ->
       ("ROOM_FULL", "Phong da du nguoi.")
 
