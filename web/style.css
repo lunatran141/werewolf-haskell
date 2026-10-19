@@ -64,6 +64,15 @@
 .chat-day-marker::before,
 .chat-day-marker::after { content: ""; flex: 1; height: 1px; background: rgba(217, 187, 255, 0.32); }
 .chat-empty { color: var(--muted); font-style: italic; }
+.chat-system-message {
+  margin: 0.65rem 0;
+  padding: 0.7rem 0.85rem;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 0.55rem 0.55rem 0;
+  color: #eee7ff;
+  background: rgba(139, 92, 246, 0.14);
+  line-height: 1.55;
+}
 #role-help-text { white-space: pre-line; }
 
 .chat-messages p,
@@ -73,6 +82,16 @@
 
 .result-card {
   text-align: center;
+}
+
+.result-actions {
+  display: grid;
+  gap: 0.85rem;
+  margin-top: 1.5rem;
+}
+
+.result-actions .main-button {
+  width: 100%;
 }
 
 .result-message {
@@ -506,10 +525,15 @@ body.in-room #message { grid-column: 1 / -1; }
 body.in-room #lobby-section { grid-column: 2; grid-row: 2 / span 4; }
 body.in-room.in-lobby #lobby-section { grid-column: 1 / -1; grid-row: 2; }
 body.in-room.in-lobby .player-list { max-width: 850px; margin: 0 auto; }
-body.in-room #day-section { grid-column: 1; grid-row: 2; }
+body.in-room #day-section { grid-column: 1; grid-row: 3; }
+body.in-room.phase-day #day-section { grid-row: 2; }
 body.in-room #night-section,
 body.in-room #voting-section,
-body.in-room #result-section { grid-column: 1; }
+body.in-room #result-section { grid-column: 1; grid-row: 2; }
+body.in-room #hunter-action-panel { grid-column: 1; grid-row: 2; }
+body.in-room.hunter-pending #night-section,
+body.in-room.hunter-pending #voting-section { grid-row: 3; }
+body.in-room.hunter-pending #day-section { grid-row: 4; }
 body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
 .dashboard-heading-actions { display: flex; align-items: center; gap: 8px; }
 .dashboard-heading-actions .leave-button { min-height: 32px; padding: 2px 12px; font-weight: 800; }
@@ -745,6 +769,7 @@ body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
   body.in-room #lobby-section,
   body.in-room #day-section,
   body.in-room #night-section,
+  body.in-room #hunter-action-panel,
   body.in-room #voting-section,
   body.in-room #result-section { grid-column: 1; grid-row: auto; }
 }
@@ -885,14 +910,22 @@ body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
 
 .discussion-skip-panel {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  align-items: stretch;
+  flex-direction: column;
   gap: 16px;
   margin: 16px 0;
   padding: 14px 16px;
   border: 1px solid rgba(205, 185, 255, 0.3);
   border-radius: 12px;
   background: rgba(9, 13, 34, 0.42);
+}
+
+.discussion-skip-copy {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px 20px;
+  flex-wrap: wrap;
 }
 
 .discussion-skip-panel[hidden] {
@@ -905,14 +938,14 @@ body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
 }
 
 .discussion-skip-panel p {
-  margin: 4px 0 0;
+  margin: 0;
   color: var(--muted);
   font-size: 13px;
 }
 
 .discussion-skip-panel button {
-  flex: none;
-  min-width: 230px;
+  width: 100%;
+  min-width: 0;
 }
 
 @media (max-width: 700px) {
@@ -991,6 +1024,11 @@ body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
   color: #edfff7;
   font-size: 14px;
   line-height: 1.7;
+}
+
+.seer-day-result {
+  margin-top: 18px;
+  box-shadow: 0 12px 30px rgba(19, 74, 67, 0.18);
 }
 
 /* Specific role accents */
@@ -1101,4 +1139,52 @@ body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
 .night-action-panel[hidden],
 .night-result-panel[hidden] {
   display: none !important;
+}
+
+body[data-phase="Day"],
+body[data-phase="Voting"] {
+  background:
+    radial-gradient(circle at 20% 18%, #9572bb 0, transparent 35%),
+    radial-gradient(circle at 82% 70%, #5b91b6 0, transparent 40%),
+    linear-gradient(145deg, #FFFACD, #FFE4E1);
+}
+
+body[data-phase="Day"] .twinkling-stars,
+body[data-phase="Voting"] .twinkling-stars {
+  opacity: 0.12;
+}
+.day-transition {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  background: rgba(255, 239, 179, 0.12);
+  animation: day-overlay 1.6s ease-out forwards;
+}
+
+.day-transition-sun {
+  font-size: clamp(110px, 22vw, 240px);
+  line-height: 1;
+  filter: drop-shadow(0 0 35px rgba(255, 216, 91, 0.8));
+  animation: day-sun 1.6s ease-out forwards;
+}
+
+@keyframes day-sun {
+  0%   { opacity: 0; transform: translateY(70px) scale(0.6); }
+  25%  { opacity: 1; transform: translateY(0) scale(1); }
+  70%  { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-50px) scale(1.1); }
+}
+
+@keyframes day-overlay {
+  0%, 70% { opacity: 1; }
+  100%    { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .day-transition {
+    display: none;
+  }
 }

@@ -24,6 +24,11 @@ import Domain.Types
 import Protocol.Types (RequestId, RoomId)
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Data.Word (Word64)
+import Numeric.Natural (Natural)
+
+-- | Sức chứa mặc định của hàng đợi lệnh cho mỗi phòng.
+defaultCommandQueueCapacity :: Natural
+defaultCommandQueueCapacity = 128
 
 -- Lệnh đã được Server gắn thông tin người gửi.
 -- PlayerId phải lấy từ phiên kết nối, không lấy từ JSON của Browser.
@@ -62,10 +67,13 @@ data RoomRuntime = RoomRuntime
   }
 
 newRoomRuntime :: RoomId -> IO RoomRuntime
-newRoomRuntime rid = do
+newRoomRuntime = newRoomRuntimeWithCapacity defaultCommandQueueCapacity
+
+newRoomRuntimeWithCapacity :: Natural -> RoomId -> IO RoomRuntime
+newRoomRuntimeWithCapacity capacity rid = do
   stateVar <- newTVarIO emptyLobby
   versionVar <- newTVarIO 0
-  commandQueue <- newTBQueueIO 128
+  commandQueue <- newTBQueueIO (max 1 capacity)
   updateChannel <- newBroadcastTChanIO
   playerIdCounter <- newTVarIO 1
   acceptedRequests <- newTVarIO []

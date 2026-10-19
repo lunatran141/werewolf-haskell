@@ -77,6 +77,48 @@ test('Trình duyệt dùng token đã lưu để reconnect đúng phòng', () =>
   assert.equal(JSON.parse(storage.get('werewolf-session')).sessionToken, 'new-token');
 });
 
+test('Phiên reconnect cũ tự được xóa và không hiện cảnh báo khi mở lại trang', () => {
+  const saved = {roomId: 'ROOM-OLD', playerId: 'p1', sessionToken: 'expired-token'};
+  const {get, message, storage} = setup('Villager', saved);
+
+  message({type: 'CommandRejected', requestId: null, code: 'INVALID_SESSION',
+    message: 'Session is no longer valid.'});
+
+  assert.equal(storage.has('werewolf-session'), false);
+  assert.equal(get('join-section').hidden, false);
+  assert.equal(get('lobby-section').hidden, true);
+  assert.equal(get('message').textContent, '');
+});
+
+test('Mỗi người có thể tự rời phòng và quay về màn hình đầu sau GameOver', () => {
+  const {get, message, connection, storage} = setup();
+  storage.set('werewolf-session', JSON.stringify({roomId: 'R', playerId: 'p1'}));
+  message({type: 'GameFinished', roomId: 'R', result: 'WinnerVillage'});
+  assert.equal(get('result-section').hidden, false);
+  assert.equal(get('return-home-button').hidden, false);
+
+  get('return-home-button').fire('click');
+  const command = connection.sent.at(-1);
+  assert.equal(command.type, 'LeaveGame');
+  assert.equal(command.roomId, 'R');
+
+  message({type: 'PlayerLeft', roomId: 'R', playerId: 'p1'});
+  assert.equal(get('result-section').hidden, true);
+  assert.equal(get('join-section').hidden, false);
+  assert.equal(storage.has('werewolf-session'), false);
+});
+
+test('Người không phải Host cũng có nút tự rời phòng sau GameOver', () => {
+  const {get, message, connection} = setup();
+  message({type: 'LobbySnapshot', roomId: 'R', selfPlayerId: 'p1', hostPlayerId: 'p2',
+    players: [{playerId: 'p1', displayName: 'Một', alive: true},
+      {playerId: 'p2', displayName: 'Hai', alive: true}]});
+  message({type: 'GameFinished', roomId: 'R', result: 'WinnerWolves'});
+  assert.equal(get('return-home-button').hidden, false);
+  get('return-home-button').fire('click');
+  assert.equal(connection.sent.at(-1).type, 'LeaveGame');
+});
+
 test('Lịch sử chat tách theo ngày, theo kênh và khử tin trùng sequence', () => {
   const {get, message, players} = setup('Werewolf');
   message({type: 'ChatMessage', roomId: 'R', playerId: 'p2', message: 'Ngày một',
@@ -229,6 +271,25 @@ test('Chỉ hiển thị bảng Voting sau khi Server chuyển đúng sang Votin
   message({type: 'VotingSnapshot', roomId: 'R', phase: 'Voting', day: 1,
     players, hasVoted: false, canShoot: false, resolved: false, result: null});
   assert.equal(get('voting-section').hidden, false);
+  assert.equal(get('voting-title').textContent, 'Bỏ phiếu · Vòng 1');
+});
+
+test('Kết quả soi vẫn hiện khi Tiên Tri là người cuối cùng và Server chuyển sang Day', () => {
+  const {get, message, players} = setup('Seer');
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 1,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+
+  message({type: 'SeerResult', roomId: 'R', team: 'Wolves'});
+  message({type: 'PhaseChanged', roomId: 'R', phase: 'Day'});
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Day', day: 1,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+
+  assert.equal(get('seer-day-result-panel').hidden, false);
+  assert.match(get('seer-day-result-text').textContent, /phe Sói/);
+
+  message({type: 'PhaseChanged', roomId: 'R', phase: 'Night'});
+  assert.equal(get('seer-day-result-panel').hidden, true,
+    'Đêm mới phải xóa kết quả soi của đêm trước');
 });
 
 test('Nút bỏ qua thảo luận chờ đủ người sống rồi Server mới mở Voting', () => {
@@ -290,11 +351,27 @@ test('Thợ Săn còn sống không thấy bộ chọn bắn; chỉ mở khi Ser
   const {get, message, players} = setup('Hunter');
   message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 1,
     players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  assert.equal(get('hunter-action-panel').hidden, true);
   assert.equal(get('hunter-choice-panel').hidden, true);
   assert.match(get('hunter-status').textContent, /đang còn sống/);
   message({type: 'HunterShotPending', roomId: 'R'});
+  assert.equal(get('hunter-action-panel').hidden, false);
   assert.equal(get('hunter-choice-panel').hidden, false);
   assert.equal(get('hunter-pass').disabled, false);
+});
+
+test('Thông báo hệ thống về kết quả phiếu được giữ trong lịch sử đúng ngày', () => {
+  const {get, message, players} = setup();
+  message({type: 'ChatMessage', roomId: 'R', day: 1, channel: 'PublicDay',
+    messageId: 'system-1', sequence: 1, senderId: '__system__',
+    text: 'Kết quả bỏ phiếu vòng 1: Hai 2 phiếu. Hai đã chết.'});
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 2,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  assert.equal(get('chat-day-select').value, '1',
+    'Sang Night mới vẫn giữ ngày vừa chốt để nhìn thấy kết quả ngay');
+  const systemLine = get('chat-messages').children[1];
+  assert.equal(systemLine.className, 'chat-system-message');
+  assert.match(systemLine.textContent, /Kết quả bỏ phiếu vòng 1/);
 });
 
 test('Mã lỗi kỹ thuật từ Server được hiển thị bằng tiếng Việt có dấu', () => {

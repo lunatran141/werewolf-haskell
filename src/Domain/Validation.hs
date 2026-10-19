@@ -219,13 +219,17 @@ validateLeave :: GameState -> PlayerId -> Either GameError Player
 
 validateLeave game pid = do
 
-  validatePhase Lobby game
+  if gamePhase game `elem` [Lobby, GameOver]
+    then Right ()
+    else Left WrongPhase
 
   validatePlayerExists pid (gamePlayers game)
 
 validateSetReady :: GameState -> PlayerId -> Either GameError Player
 
-validateSetReady = validateLeave
+validateSetReady game pid = do
+  validatePhase Lobby game
+  validatePlayerExists pid (gamePlayers game)
 
 validateStartGame :: PlayerId -> GameState -> Either GameError ()
 
@@ -591,7 +595,9 @@ validateGameInvariant game = do
 
       ids = map playerId ps
 
-      active = gamePhase game /= Lobby
+      active = gamePhase game `notElem` [Lobby, GameOver]
+
+      finished = gamePhase game == GameOver
 
       uniqueActors =
 
@@ -720,6 +726,24 @@ validateGameInvariant game = do
         then Right ()
 
         else Left InvalidGameState
+
+    else if finished
+      then do
+        let assigned =
+              [ role
+              | p <- ps
+              , Just role <- [playerRole p]
+              ]
+            roleCount role roles = length (filter (== role) roles)
+            rolesAreSubset =
+              all
+                (\role -> roleCount role assigned <= roleCount role (gameConfiguredRoles game))
+                [Werewolf, Seer, Guard, Witch, Hunter, Villager]
+        if all ((/= Nothing) . playerRole) ps
+            && gameDay game >= 1
+            && rolesAreSubset
+          then Right ()
+          else Left InvalidGameState
 
     else
 
