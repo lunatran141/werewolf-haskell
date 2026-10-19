@@ -22,6 +22,7 @@ import Control.Concurrent.STM
   )
 import Control.Exception (SomeException, bracket, try)
 import Control.Monad (forM, forM_)
+import Data.Unique (hashUnique, newUnique)
 import Domain.Engine
   ( closeWolfVoting
   , completeNightTurn
@@ -131,7 +132,9 @@ submitWithReq room reqId actor command = do
 
 -- Đưa một lệnh vào queue rồi chạy đúng một lượt GameLoop.
 submit :: RoomRuntime -> String -> Command -> IO (Either GameError GameState)
-submit room = submitWithReq room "req-test"
+submit room actor command = do
+  unique <- newUnique
+  submitWithReq room ("req-test-" ++ show (hashUnique unique)) actor command
 
 -- Gửi lệnh vào phòng khi đang có worker chạy nền và chờ kết quả.
 enqueueAndAwait :: RoomRuntime -> String -> String -> Command -> IO (Either GameError GameState)
@@ -580,6 +583,18 @@ e07ConcurrentStmSpec = describe "T08 E07 - Concurrent Commands via STM (9 Client
 -- =============================================================================
 e11IdempotencySpec :: Spec
 e11IdempotencySpec = describe "T08 E11 - Idempotency (Duplicate requestId)" $ do
+
+  it "requestId cung khong the ap dung lai lenh Join" $ do
+    room <- newRoomRuntime "ROOM-IDEM"
+    first <- submitWithReq room "join-once" "p-new" (Join "p-new" "New")
+    first `shouldSatisfy` either (const False) (const True)
+    versionAfterFirst <- readTVarIO (roomVersion room)
+    second <- submitWithReq room "join-once" "p-new" (Join "p-new" "New")
+    second `shouldBe` Left DuplicateRequest
+    versionAfterSecond <- readTVarIO (roomVersion room)
+    versionAfterSecond `shouldBe` versionAfterFirst
+    state <- readTVarIO (roomState room)
+    length (gamePlayers state) `shouldBe` 1
 
   it "Gui 2 lan cung (actorId, requestId) cho NightAction, ChatInChannel va Vote chi ap dung 1 lan" $ do
     (room, startUpdate) <- setupStartedNinePlayerRoom

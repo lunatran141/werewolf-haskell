@@ -187,6 +187,8 @@ data GameError
   | AbilityAlreadyUsed | HunterNotPending | InvalidTiePolicy
   | DuplicateNightAction | EmptyChat | ChatTooLong | NotReady
   | AlreadySkippedDiscussion
+  -- T08(fix): Lỗi vận hành khi queue đầy hoặc worker không phản hồi kịp.
+  | ServerBusy | ServerTimeout
   -- T06: Một request đã thành công không được phát lại ở vòng sau.
   | DuplicateRequest
   | InvalidAppearance

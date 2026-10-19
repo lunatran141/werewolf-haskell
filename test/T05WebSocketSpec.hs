@@ -101,6 +101,13 @@ sendMessage connection message =
 -- Moi lan doc duoc gioi han trong 3 giay.
 receiveMessage :: WS.Connection -> IO ServerMessage
 receiveMessage connection = do
+  message <- receiveAnyMessage connection
+  case message of
+    MsgRoomVersion {} -> receiveMessage connection
+    _ -> pure message
+
+receiveAnyMessage :: WS.Connection -> IO ServerMessage
+receiveAnyMessage connection = do
   received <- timeout 3000000
     (WS.receiveData connection :: IO BL.ByteString)
 
@@ -125,9 +132,18 @@ receiveUntil connection predicate = do
   message <- receiveMessage connection
   if predicate message then pure message else receiveUntil connection predicate
 
+receiveUntilAny :: WS.Connection -> (ServerMessage -> Bool) -> IO ServerMessage
+receiveUntilAny connection predicate = do
+  message <- receiveAnyMessage connection
+  if predicate message then pure message else receiveUntilAny connection predicate
+
 isLobbySnapshot :: ServerMessage -> Bool
 isLobbySnapshot MsgLobbySnapshot {} = True
 isLobbySnapshot _ = False
+
+isRoomVersion :: ServerMessage -> Bool
+isRoomVersion MsgRoomVersion {} = True
+isRoomVersion _ = False
 
 -- Tao phong va lay PlayerId do Server cap.
 createRoom :: WS.Connection -> String -> IO String
@@ -296,6 +312,8 @@ main = do
                 selfId `shouldBe` originalPlayerId
                 length players `shouldBe` 1
               _ -> fail "Khong nhan duoc LobbySnapshot sau reconnect"
+            version <- receiveUntilAny connection isRoomVersion
+            version `shouldBe` MsgRoomVersion "ROOM-R01" 1
 
       it "reconnect giua Day nhan dung thoi gian con lai, khong reset 3 phut" $
         withTestTimeout $ do
@@ -361,11 +379,14 @@ main = do
                   [ player {playerRole = Just Witch}
                   | player <- gamePlayers state
                   ]
+                wolf = Player "wolf-2" "Wolf" (Just Werewolf) False Alive defaultAppearance
+                victim = Player "night-victim" "Victim" (Just Villager) False Alive defaultAppearance
             writeTVar (roomState room) state
-              { gamePlayers = players
+              { gamePlayers = players ++ [wolf, victim]
               , gamePhase = Night
               , gameDay = 1
-              , gameNightActions = [(actor, WitchPass)]
+              , gameWolfVotingClosed = True
+              , gameNightActions = [(actor, WitchPass), ("wolf-2", WolfTarget "night-victim")]
               , gameWitchHealReady = False
               , gameWitchPoisonReady = True
               }
@@ -373,6 +394,11 @@ main = do
           WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
             sendMessage connection
               (ClientReconnect "private-reconnect" "ROOM-R03" sessionToken)
+            victimNotice <- receiveUntil connection $ \message ->
+              case message of
+                MsgWitchVictimNotice "ROOM-R03" _ -> True
+                _ -> False
+            victimNotice `shouldBe` MsgWitchVictimNotice "ROOM-R03" (Just "night-victim")
             privateState <- receiveUntil connection $ \message ->
               case message of
                 MsgPrivateActionState "ROOM-R03" _ _ _ _ -> True

@@ -27,6 +27,7 @@ const state = {
   connected: false,
   entranceMode: "join",
   roomId: null,
+  reconnecting: false,
   selfPlayerId: null,
   hostPlayerId: null,
   players: [],
@@ -1100,9 +1101,24 @@ function readSavedSession() {
 
 function saveSession(roomId, playerId, sessionToken) {
   try {
+    const previous = readSavedSession();
     localStorage.setItem(SESSION_STORAGE_KEY,
-      JSON.stringify({roomId, playerId, sessionToken}));
+      JSON.stringify({roomId, playerId, sessionToken,
+        lastVersion: previous?.roomId === roomId ? previous.lastVersion : 0}));
   } catch { /* Trình duyệt chặn localStorage: ván vẫn chơi được nhưng không tự nối lại. */ }
+}
+
+function saveRoomVersion(roomId, version) {
+  const saved = readSavedSession();
+  if (!saved || saved.roomId !== roomId || !Number.isSafeInteger(version) || version < 0) return;
+  const previousVersion = Number.isSafeInteger(saved.lastVersion) ? saved.lastVersion : 0;
+  if (!state.reconnecting && previousVersion > 0 && version > previousVersion + 1) return false;
+  try {
+    saved.lastVersion = Math.max(previousVersion, version);
+    localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(saved));
+  } catch { /* Cursor không ảnh hưởng khả năng chơi nếu storage bị chặn. */ }
+  state.reconnecting = false;
+  return true;
 }
 
 function clearSavedSession() {
@@ -1289,6 +1305,10 @@ function handleServerMessage(message) {
   // Không áp dụng thông điệp của phòng khác vào UI đang mở.
   if (message.roomId && state.roomId && message.roomId !== state.roomId && message.type !== "LobbySnapshot") return;
   switch (message.type) {
+    case "RoomVersion":
+      if (saveRoomVersion(message.roomId, message.version) === false) socket.close();
+      break;
+
     case "VotingSnapshot":
       // Day và Voting cùng số vòng: phải xét cả chuyển phase để xóa tally cũ.
       if (message.phase === "Voting" && (voting.phase !== "Voting" || message.day !== voting.day)) {
@@ -1856,11 +1876,13 @@ function connectSocket() {
     state.error = "";
     const saved = readSavedSession();
     if (saved) {
+      state.reconnecting = true;
       const requestId = `reconnect-${Date.now()}-${++requestNumber}`;
       state.pending = {type: "Reconnect", requestId};
       socket.send(JSON.stringify({
         type: "Reconnect", requestId,
-        roomId: saved.roomId, sessionToken: saved.sessionToken
+        roomId: saved.roomId, sessionToken: saved.sessionToken,
+        lastVersion: Number.isSafeInteger(saved.lastVersion) ? saved.lastVersion : 0
       }));
     }
     render();

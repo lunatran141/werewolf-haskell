@@ -39,18 +39,20 @@ function setup(role = 'Villager', savedSession = null) {
   if (savedSession) storage.set('werewolf-session', JSON.stringify(savedSession));
   class Socket {
     static OPEN = 1;
-    constructor() { this.readyState = 1; this.listeners = {}; this.sent = []; connection = this; }
+    constructor() { this.readyState = 1; this.listeners = {}; this.sent = []; this.closed = false; connection = this; }
     addEventListener(type, callback) { this.listeners[type] = callback; }
     send(data) { this.sent.push(JSON.parse(data)); }
+    close() { this.closed = true; }
   }
   const context = vm.createContext({WebSocket: Socket, console,
-    setInterval() { return 1; }, clearInterval() {},
+    location: {protocol: 'http:', host: 'localhost'},
+    setInterval() { return 1; }, clearInterval() {}, setTimeout() { return 1; }, clearTimeout() {},
     localStorage: {
       getItem(key) { return storage.get(key) ?? null; },
       setItem(key, value) { storage.set(key, value); },
       removeItem(key) { storage.delete(key); }
     },
-    document: {body: new Element(), querySelector: selector => get(selector.slice(1)),
+    document: {body: new Element(), querySelector: selector => selector.startsWith('#') ? get(selector.slice(1)) : null,
       getElementById: get, createElement: () => new Element(), createTextNode: value => value}
   });
   vm.runInContext(readFileSync(join(__dirname, '../web/avatar.js'), 'utf8'), context);
@@ -67,14 +69,20 @@ function setup(role = 'Villager', savedSession = null) {
 }
 
 test('Trình duyệt dùng token đã lưu để reconnect đúng phòng', () => {
-  const saved = {roomId: 'R', playerId: 'p1', sessionToken: 'secret-token'};
+  const saved = {roomId: 'R', playerId: 'p1', sessionToken: 'secret-token', lastVersion: 42};
   const {connection, message, storage} = setup('Villager', saved);
   assert.equal(connection.sent[0].type, 'Reconnect');
   assert.equal(connection.sent[0].roomId, 'R');
   assert.equal(connection.sent[0].sessionToken, 'secret-token');
+  assert.equal(connection.sent[0].lastVersion, 42);
 
   message({type: 'SessionEstablished', roomId: 'R', playerId: 'p1', sessionToken: 'new-token'});
   assert.equal(JSON.parse(storage.get('werewolf-session')).sessionToken, 'new-token');
+  message({type: 'RoomVersion', roomId: 'R', version: 47});
+  assert.equal(JSON.parse(storage.get('werewolf-session')).lastVersion, 47);
+  message({type: 'RoomVersion', roomId: 'R', version: 49});
+  assert.equal(connection.closed, true, 'server reconnect se co snapshot khi cursor bi nhay');
+  assert.equal(JSON.parse(storage.get('werewolf-session')).lastVersion, 47);
 });
 
 test('Phiên reconnect cũ tự được xóa và không hiện cảnh báo khi mở lại trang', () => {
