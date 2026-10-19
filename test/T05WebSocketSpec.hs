@@ -5,6 +5,9 @@ module Main (main) where
 
 import Control.Concurrent
   ( forkIO
+  , newEmptyMVar
+  , putMVar
+  , takeMVar
   , threadDelay
   )
 
@@ -208,7 +211,9 @@ startTestServer = do
   registry <- newRoomRegistry
 
   let startWorker room =
-        void (forkIO (runLobbyLoop room))
+        if roomId room == "ROOM-SLOW-WORKER"
+          then pure ()
+          else void (forkIO (runLobbyLoop room))
 
   _ <- forkIO $
     WS.runServer
@@ -282,6 +287,49 @@ main = do
   hspec $ do
 
     describe "T07 - WebSocket reconnect" $ do
+      it "Join vao phong co worker treo khong chan phong khac" $
+        withTestTimeout $ do
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientCreateRoom "slow-create" "ROOM-SLOW-WORKER" "SlowHost")
+            _ <- receiveUntil connection isLobbySnapshot
+            pure ()
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientCreateRoom "fast-create" "ROOM-FAST-WORKER" "FastHost")
+            _ <- receiveUntil connection isLobbySnapshot
+            pure ()
+
+          started <- newEmptyMVar
+          slowResult <- newEmptyMVar
+          _ <- forkIO $ WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientJoin "slow-join" "ROOM-SLOW-WORKER" "SlowJoiner")
+            putMVar started ()
+            received <- timeout 6500000
+              (WS.receiveData connection :: IO BL.ByteString)
+            putMVar slowResult $ case received of
+              Just payload -> either (const Nothing) Just (eitherDecode payload)
+              Nothing -> Nothing
+          takeMVar started
+
+          fastJoin <- timeout 2500000 $
+            WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+              sendMessage connection
+                (ClientJoin "fast-join" "ROOM-FAST-WORKER" "FastJoiner")
+              receiveUntil connection isLobbySnapshot
+          case fastJoin of
+            Just (MsgLobbySnapshot "ROOM-FAST-WORKER" _ _ players) ->
+              length players `shouldBe` 2
+            _ -> expectationFailure
+              "Join phòng nhanh bị chặn bởi worker phòng chậm."
+
+          timedOut <- takeMVar slowResult
+          case timedOut of
+            Just (MsgRejected (Just "slow-join") "ServerTimeout" _) -> pure ()
+            _ -> expectationFailure
+              "Join tới worker treo không trả ServerTimeout đúng requestId."
+
       it "giu nguyen PlayerId va snapshot khi noi lai bang token" $
         withTestTimeout $ do
           (originalPlayerId, sessionToken) <-
@@ -314,6 +362,38 @@ main = do
               _ -> fail "Khong nhan duoc LobbySnapshot sau reconnect"
             version <- receiveUntilAny connection isRoomVersion
             version `shouldBe` MsgRoomVersion "ROOM-R01" 1
+
+      it "reconnect khoi phuc snapshot sau khi phong da sang Day 2" $
+        withTestTimeout $ do
+          token <- WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientCreateRoom "day2-create" "ROOM-DAY2-RECONNECT" "DayTwoPlayer")
+            established <- receiveUntil connection $ \message ->
+              case message of
+                MsgSessionEstablished "ROOM-DAY2-RECONNECT" _ _ -> True
+                _ -> False
+            case established of
+              MsgSessionEstablished _ _ value -> pure value
+              _ -> fail "Khong nhan duoc reconnect token"
+
+          room <- requireRoom registry "ROOM-DAY2-RECONNECT"
+          atomically $ do
+            state <- readTVar (roomState room)
+            writeTVar (roomState room) state {gamePhase = Day, gameDay = 1}
+          atomically $ do
+            state <- readTVar (roomState room)
+            writeTVar (roomState room) state {gameDay = 2}
+
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect "day2-reconnect" "ROOM-DAY2-RECONNECT" token)
+            recovered <- receiveUntilAny connection $ \message ->
+              case message of
+                MsgVotingSnapshot "ROOM-DAY2-RECONNECT" Day 2 _ _ _ _ _ -> True
+                _ -> False
+            case recovered of
+              MsgVotingSnapshot _ Day 2 _ _ _ _ _ -> pure ()
+              _ -> fail "Reconnect khong khoi phuc snapshot Day 2"
 
       it "reconnect giua Day nhan dung thoi gian con lai, khong reset 3 phut" $
         withTestTimeout $ do

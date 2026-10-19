@@ -34,6 +34,7 @@ import Control.Exception (finally)
 import Control.Monad (forM_, forever, void)
 
 import Data.IORef (IORef, newIORef, readIORef, writeIORef)
+import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Word (Word64)
 import Numeric (showHex)
 import GHC.Clock (getMonotonicTimeNSec)
@@ -99,10 +100,10 @@ import Server.Broadcast
 
 import Server.Connection
   ( OutboundQueue
+  , enqueueOutbound
   , newOutboundQueue
-  , readOutbound
+  , readOutboundRecoverable
   , tryEnqueueRoomCommand
-  , writeBoundedDropOldest
   )
 
 import Server.GameLoop
@@ -134,7 +135,7 @@ sendToClient :: OutboundQueue -> ServerMessage -> IO ()
 
 sendToClient outbound message =
 
-  void (atomically (writeBoundedDropOldest outbound message))
+  void (atomically (enqueueOutbound outbound message))
 
 isRoleAssignment :: DomainEvent -> Bool
 isRoleAssignment event =
@@ -298,7 +299,7 @@ beginSession
 
 beginSession room actor sessionRef outbound = do
 
-  let enqueueSTM = void . writeBoundedDropOldest outbound
+  let enqueueSTM = void . enqueueOutbound outbound
 
   updates <- atomically $ do
 
@@ -758,18 +759,7 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
           let command = Join actor name
 
           found <- withMVar (registryRooms registry) $ \rooms ->
-
-            case lookup rid rooms of
-
-              Nothing ->
-
-                pure Nothing
-
-              Just room -> do
-
-                result <- submitCommand room requestId actor command
-
-                pure (Just (room, result))
+            pure (lookup rid rooms)
 
           case found of
 
@@ -779,8 +769,8 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
 
                 "Khong tim thay phong."
 
-            Just (room, result) ->
-
+            Just room -> do
+              result <- submitCommand room requestId actor command
               case result of
 
                 Left _ ->
@@ -807,20 +797,15 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
           let command = JoinWithAppearance actor name appearance
 
           found <- withMVar (registryRooms registry) $ \rooms ->
-            case lookup rid rooms of
-              Nothing ->
-                pure Nothing
-
-              Just room -> do
-                result <- submitCommand room requestId actor command
-                pure (Just (room, result))
+            pure (lookup rid rooms)
 
           case found of
             Nothing ->
               reject outbound requestId "ROOM_NOT_FOUND"
                 "Khong tim thay phong."
 
-            Just (room, result) ->
+            Just room -> do
+              result <- submitCommand room requestId actor command
               case result of
                 Left _ ->
                   sendToClient outbound
@@ -1065,11 +1050,16 @@ webSocketApp registry startWorker pending = do
 
   -- Moi connection co mot writer rieng, bo qua ngoai le dong socket thong thuong.
 
-  writerThread <- forkIO $ runIgnoringBenignSocketException $ forever $ do
-
-    message <- atomically (readOutbound outbound)
-
-    WS.sendTextData connection (encodeServerMessage message)
+  writerThread <- forkIO $ runIgnoringBenignSocketException $ let
+    writeNext = do
+      next <- atomically (readOutboundRecoverable outbound)
+      case next of
+        Just message -> do
+          WS.sendTextData connection (encodeServerMessage message)
+          writeNext
+        Nothing -> WS.sendClose connection
+          (BL8.pack "outbound queue overflow; reconnect for snapshot")
+    in writeNext
 
   let receiveLoop = runIgnoringBenignSocketException $ forever $ do
 

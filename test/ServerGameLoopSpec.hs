@@ -73,6 +73,8 @@ import Server.Broadcast
   )
 import Server.Connection
   ( newOutboundQueueWithCapacity
+  , enqueueOutbound
+  , readOutboundRecoverable
   , sendBounded
   , tryEnqueueRoomCommand
   , tryReadOutbound
@@ -767,6 +769,16 @@ e14BackpressureSpec = describe "T08 E14 - Backpressure & Bounded Queue" $ do
     m4 <- atomically (tryReadOutbound queue)
 
     (m1, m2, m3, m4) `shouldBe` (Just (msg "p3"), Just (msg "p4"), Just (msg "p5"), Nothing)
+
+  it "OutboundQueue bao overflow de connection reconnect va phuc hoi snapshot" $ do
+    queue <- newOutboundQueueWithCapacity 1
+    let first = MsgPlayerDied "ROOM-BP" "p1"
+        lost = MsgPlayerDied "ROOM-BP" "p2"
+    firstQueued <- atomically (enqueueOutbound queue first)
+    secondQueued <- atomically (enqueueOutbound queue lost)
+    next <- atomically (readOutboundRecoverable queue)
+
+    (firstQueued, secondQueued, next) `shouldBe` (True, False, Nothing)
 
 -- =============================================================================
 -- E17: Supervision & Worker Failure Cleanup
