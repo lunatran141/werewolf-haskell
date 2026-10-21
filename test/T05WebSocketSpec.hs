@@ -25,6 +25,8 @@ import qualified Data.ByteString.Lazy as BL
 
 import Domain.Types
   ( Appearance(..)
+  , ChatChannel(..)
+  , ChatRecord(..)
   , defaultAppearance
   , DomainEvent(..)
   , GameState(..)
@@ -147,6 +149,10 @@ isLobbySnapshot _ = False
 isRoomVersion :: ServerMessage -> Bool
 isRoomVersion MsgRoomVersion {} = True
 isRoomVersion _ = False
+
+isChatHistorySnapshot :: ServerMessage -> Bool
+isChatHistorySnapshot MsgChatHistorySnapshot {} = True
+isChatHistorySnapshot _ = False
 
 -- Tao phong va lay PlayerId do Server cap.
 createRoom :: WS.Connection -> String -> IO String
@@ -394,6 +400,417 @@ main = do
             case recovered of
               MsgVotingSnapshot _ Day 2 _ _ _ _ _ -> pure ()
               _ -> fail "Reconnect khong khoi phuc snapshot Day 2"
+
+      it "reconnect Day 2 giu chat Day 1 va khong nhan doi lich su" $
+        withTestTimeout $ do
+          (actor, sessionToken) <-
+            WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+              sendMessage connection
+                (ClientCreateRoom "history-create" "ROOM-HISTORY-RECONNECT" "HistoryPlayer")
+              established <- receiveUntil connection $ \message ->
+                case message of
+                  MsgSessionEstablished "ROOM-HISTORY-RECONNECT" _ _ -> True
+                  _ -> False
+              (playerId, token) <- case established of
+                MsgSessionEstablished _ playerId value -> pure (playerId, value)
+                _ -> fail "Khong nhan duoc reconnect token"
+
+              room <- requireRoom registry "ROOM-HISTORY-RECONNECT"
+              atomically $ do
+                state <- readTVar (roomState room)
+                writeTVar (roomState room) state {gamePhase = Day, gameDay = 1}
+
+              sendMessage connection
+                (ClientChannelChat
+                  "history-chat-day-1"
+                  "ROOM-HISTORY-RECONNECT"
+                  PublicDay
+                  "Tin nhan Ngay 1")
+              stored <- receiveUntil connection $ \message ->
+                case message of
+                  MsgStoredChatMessage "ROOM-HISTORY-RECONNECT" record ->
+                    chatMessageId record == "ROOM-HISTORY-RECONNECT-chat-1"
+                  _ -> False
+              case stored of
+                MsgStoredChatMessage _ record -> do
+                  chatDay record `shouldBe` 1
+                  chatChannel record `shouldBe` PublicDay
+                  chatSenderId record `shouldBe` playerId
+                  chatText record `shouldBe` "Tin nhan Ngay 1"
+                _ -> fail "Khong nhan duoc chat Day 1 da luu"
+              pure (playerId, token)
+
+          room <- requireRoom registry "ROOM-HISTORY-RECONNECT"
+          atomically $ do
+            state <- readTVar (roomState room)
+            writeTVar (roomState room) state {gameDay = 2}
+
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect
+                "history-reconnect"
+                "ROOM-HISTORY-RECONNECT"
+                sessionToken)
+            historyMessage <- receiveUntil connection isChatHistorySnapshot
+            case historyMessage of
+              MsgChatHistorySnapshot "ROOM-HISTORY-RECONNECT" records -> do
+                length records `shouldBe` 1
+                case records of
+                  [record] -> do
+                    chatDay record `shouldBe` 1
+                    chatChannel record `shouldBe` PublicDay
+                    chatSenderId record `shouldBe` actor
+                    chatText record `shouldBe` "Tin nhan Ngay 1"
+                  _ -> expectationFailure
+                    "Reconnect da lam mat hoac nhan doi chat Day 1"
+              _ -> fail "Reconnect khong tra ChatHistorySnapshot"
+
+      it "gui lai cung requestId sau reconnect khong nhan doi NightAction va Vote" $
+        withTestTimeout $ do
+          (actor, sessionToken) <-
+            WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+              sendMessage connection
+                (ClientCreateRoom "idem-create" "ROOM-IDEM-RECONNECT" "RetryPlayer")
+              established <- receiveUntil connection $ \message ->
+                case message of
+                  MsgSessionEstablished "ROOM-IDEM-RECONNECT" _ _ -> True
+                  _ -> False
+              case established of
+                MsgSessionEstablished _ playerId token -> pure (playerId, token)
+                _ -> fail "Khong nhan duoc reconnect token"
+
+          room <- requireRoom registry "ROOM-IDEM-RECONNECT"
+          let configuredRoles =
+                [ Werewolf, Werewolf, Seer, Guard
+                , Witch, Hunter, Villager, Villager
+                ]
+              extraPlayers =
+                [ Player "idem-wolf-2" "WolfTwo" (Just Werewolf) False Alive defaultAppearance
+                , Player "idem-seer" "Seer" (Just Seer) False Alive defaultAppearance
+                , Player "idem-guard" "Guard" (Just Guard) False Alive defaultAppearance
+                , Player "idem-witch" "Witch" (Just Witch) False Alive defaultAppearance
+                , Player "idem-hunter" "Hunter" (Just Hunter) False Alive defaultAppearance
+                , Player "idem-villager-1" "VillagerOne" (Just Villager) False Alive defaultAppearance
+                , Player "idem-villager-2" "VillagerTwo" (Just Villager) False Alive defaultAppearance
+                ]
+              nightTarget = "idem-villager-1"
+              voteTarget = "idem-villager-2"
+
+          atomically $ do
+            state <- readTVar (roomState room)
+            let actorPlayers =
+                  [ player {playerRole = Just Werewolf}
+                  | player <- gamePlayers state
+                  ]
+            writeTVar (roomState room) state
+              { gamePlayers = actorPlayers ++ extraPlayers
+              , gamePhase = Night
+              , gameDay = 1
+              , gameConfiguredRoles = configuredRoles
+              }
+
+          -- Lan gui dau tien thanh cong, sau do ket noi bi dong.
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect "idem-night-reconnect" "ROOM-IDEM-RECONNECT" sessionToken)
+            _ <- receiveUntil connection $ \message ->
+              case message of
+                MsgSessionEstablished "ROOM-IDEM-RECONNECT" _ _ -> True
+                _ -> False
+            sendMessage connection
+              (ClientNightAction
+                "idem-night-action"
+                "ROOM-IDEM-RECONNECT"
+                (WolfTarget nightTarget))
+            accepted <- receiveUntil connection $ \message ->
+              message == MsgNightActionAccepted "ROOM-IDEM-RECONNECT"
+            accepted `shouldBe` MsgNightActionAccepted "ROOM-IDEM-RECONNECT"
+
+          versionAfterNight <- atomically (readTVar (roomVersion room))
+
+          -- Browser retry cung requestId sau reconnect: Server phai tu choi
+          -- va khong duoc ghi them NightAction.
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect "idem-night-retry-reconnect" "ROOM-IDEM-RECONNECT" sessionToken)
+            _ <- receiveUntil connection $ \message ->
+              case message of
+                MsgSessionEstablished "ROOM-IDEM-RECONNECT" _ _ -> True
+                _ -> False
+            sendMessage connection
+              (ClientNightAction
+                "idem-night-action"
+                "ROOM-IDEM-RECONNECT"
+                (WolfTarget nightTarget))
+            rejected <- receiveUntil connection $ \message ->
+              case message of
+                MsgRejected (Just "idem-night-action") "DuplicateRequest" _ -> True
+                _ -> False
+            case rejected of
+              MsgRejected (Just requestId) code _ -> do
+                requestId `shouldBe` "idem-night-action"
+                code `shouldBe` "DuplicateRequest"
+              _ -> fail "Retry NightAction khong bi tu choi dung requestId"
+
+          stateAfterNightRetry <- atomically (readTVar (roomState room))
+          versionAfterNightRetry <- atomically (readTVar (roomVersion room))
+          gameNightActions stateAfterNightRetry
+            `shouldBe` [(actor, WolfTarget nightTarget)]
+          versionAfterNightRetry `shouldBe` versionAfterNight
+
+          -- Chuyen fixture sang Voting de kiem tra cung quy tac voi Vote.
+          atomically $ do
+            state <- readTVar (roomState room)
+            writeTVar (roomState room) state
+              { gamePhase = Voting
+              , gameNightActions = []
+              , gameVotes = []
+              }
+
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect "idem-vote-reconnect" "ROOM-IDEM-RECONNECT" sessionToken)
+            _ <- receiveUntil connection $ \message ->
+              case message of
+                MsgSessionEstablished "ROOM-IDEM-RECONNECT" _ _ -> True
+                _ -> False
+            sendMessage connection
+              (ClientVote "idem-vote" "ROOM-IDEM-RECONNECT" voteTarget)
+            accepted <- receiveUntil connection $ \message ->
+              message == MsgActionAccepted "idem-vote" "ROOM-IDEM-RECONNECT"
+            accepted `shouldBe` MsgActionAccepted "idem-vote" "ROOM-IDEM-RECONNECT"
+
+          versionAfterVote <- atomically (readTVar (roomVersion room))
+
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect "idem-vote-retry-reconnect" "ROOM-IDEM-RECONNECT" sessionToken)
+            _ <- receiveUntil connection $ \message ->
+              case message of
+                MsgSessionEstablished "ROOM-IDEM-RECONNECT" _ _ -> True
+                _ -> False
+            sendMessage connection
+              (ClientVote "idem-vote" "ROOM-IDEM-RECONNECT" voteTarget)
+            rejected <- receiveUntil connection $ \message ->
+              case message of
+                MsgRejected (Just "idem-vote") "DuplicateRequest" _ -> True
+                _ -> False
+            case rejected of
+              MsgRejected (Just requestId) code _ -> do
+                requestId `shouldBe` "idem-vote"
+                code `shouldBe` "DuplicateRequest"
+              _ -> fail "Retry Vote khong bi tu choi dung requestId"
+
+          stateAfterVoteRetry <- atomically (readTVar (roomState room))
+          versionAfterVoteRetry <- atomically (readTVar (roomVersion room))
+          gameVotes stateAfterVoteRetry `shouldBe` [(actor, voteTarget)]
+          versionAfterVoteRetry `shouldBe` versionAfterVote
+
+      it "nguoi da chet reconnect van doc chat cong khai nhung khong duoc hanh dong" $
+        withTestTimeout $ do
+          (actor, sessionToken) <-
+            WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+              sendMessage connection
+                (ClientCreateRoom "dead-create" "ROOM-DEAD-RECONNECT" "DeadPlayer")
+              established <- receiveUntil connection $ \message ->
+                case message of
+                  MsgSessionEstablished "ROOM-DEAD-RECONNECT" _ _ -> True
+                  _ -> False
+              case established of
+                MsgSessionEstablished _ playerId token -> pure (playerId, token)
+                _ -> fail "Khong nhan duoc reconnect token"
+
+          room <- requireRoom registry "ROOM-DEAD-RECONNECT"
+          let configuredRoles =
+                [ Werewolf, Werewolf, Seer, Guard
+                , Witch, Hunter, Villager, Villager
+                ]
+              extraPlayers =
+                [ Player "dead-wolf-2" "DeadWolfTwo" (Just Werewolf) False Alive defaultAppearance
+                , Player "dead-seer" "DeadSeer" (Just Seer) False Alive defaultAppearance
+                , Player "dead-guard" "DeadGuard" (Just Guard) False Alive defaultAppearance
+                , Player "dead-witch" "DeadWitch" (Just Witch) False Alive defaultAppearance
+                , Player "dead-hunter" "DeadHunter" (Just Hunter) False Alive defaultAppearance
+                , Player "dead-villager-1" "DeadVillagerOne" (Just Villager) False Alive defaultAppearance
+                , Player "dead-villager-2" "DeadVillagerTwo" (Just Villager) False Alive defaultAppearance
+                ]
+              target = "dead-villager-1"
+
+          atomically $ do
+            state <- readTVar (roomState room)
+            let actorPlayers =
+                  [ player {playerRole = Just Werewolf}
+                  | player <- gamePlayers state
+                  ]
+            writeTVar (roomState room) state
+              { gamePlayers = actorPlayers ++ extraPlayers
+              , gamePhase = Day
+              , gameDay = 1
+              , gameConfiguredRoles = configuredRoles
+              }
+
+          -- Tao mot tin cong khai luc actor con song.
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect "dead-alive-reconnect" "ROOM-DEAD-RECONNECT" sessionToken)
+            _ <- receiveUntil connection $ \message ->
+              case message of
+                MsgSessionEstablished "ROOM-DEAD-RECONNECT" _ _ -> True
+                _ -> False
+            sendMessage connection
+              (ClientChannelChat
+                "dead-public-history"
+                "ROOM-DEAD-RECONNECT"
+                PublicDay
+                "Tin cong khai truoc khi chet")
+            stored <- receiveUntil connection $ \message ->
+              case message of
+                MsgStoredChatMessage "ROOM-DEAD-RECONNECT" record ->
+                  chatText record == "Tin cong khai truoc khi chet"
+                _ -> False
+            case stored of
+              MsgStoredChatMessage _ record ->
+                chatSenderId record `shouldBe` actor
+              _ -> fail "Khong luu duoc chat cong khai"
+
+          -- Danh dau actor da chet, sau do ket noi lai bang cung session.
+          atomically $ do
+            state <- readTVar (roomState room)
+            let deadPlayers =
+                  [ if playerId player == actor
+                      then player {playerLifeStatus = Dead}
+                      else player
+                  | player <- gamePlayers state
+                  ]
+            writeTVar (roomState room) state {gamePlayers = deadPlayers}
+
+          versionBeforeRejectedActions <- atomically (readTVar (roomVersion room))
+
+          WS.runClient "127.0.0.1" serverPort "/" $ \connection -> do
+            sendMessage connection
+              (ClientReconnect "dead-reconnect" "ROOM-DEAD-RECONNECT" sessionToken)
+            _ <- receiveUntil connection $ \message ->
+              case message of
+                MsgSessionEstablished "ROOM-DEAD-RECONNECT" _ _ -> True
+                _ -> False
+
+            historyMessage <- receiveUntil connection isChatHistorySnapshot
+            case historyMessage of
+              MsgChatHistorySnapshot "ROOM-DEAD-RECONNECT" records -> do
+                length records `shouldBe` 1
+                case records of
+                  [record] -> do
+                    chatChannel record `shouldBe` PublicDay
+                    chatSenderId record `shouldBe` actor
+                    chatText record `shouldBe` "Tin cong khai truoc khi chet"
+                  _ -> expectationFailure
+                    "Nguoi da chet khong nhan dung lich su chat cong khai"
+              _ -> fail "Reconnect khong tra lich su chat cong khai"
+
+            sendMessage connection
+              (ClientChannelChat
+                "dead-chat"
+                "ROOM-DEAD-RECONNECT"
+                PublicDay
+                "Khong duoc gui")
+            chatRejected <- receiveUntil connection $ \message ->
+              case message of
+                MsgRejected (Just "dead-chat") "DeadPlayer" _ -> True
+                _ -> False
+            case chatRejected of
+              MsgRejected _ code _ -> code `shouldBe` "DeadPlayer"
+              _ -> fail "Nguoi da chet van gui duoc chat"
+
+            atomically $ do
+              state <- readTVar (roomState room)
+              writeTVar (roomState room) state {gamePhase = Voting}
+            sendMessage connection
+              (ClientVote "dead-vote" "ROOM-DEAD-RECONNECT" target)
+            voteRejected <- receiveUntil connection $ \message ->
+              case message of
+                MsgRejected (Just "dead-vote") "DeadPlayer" _ -> True
+                _ -> False
+            case voteRejected of
+              MsgRejected _ code _ -> code `shouldBe` "DeadPlayer"
+              _ -> fail "Nguoi da chet van bo phieu duoc"
+
+            atomically $ do
+              state <- readTVar (roomState room)
+              writeTVar (roomState room) state {gamePhase = Night}
+            sendMessage connection
+              (ClientNightAction
+                "dead-night"
+                "ROOM-DEAD-RECONNECT"
+                (WolfTarget target))
+            nightRejected <- receiveUntil connection $ \message ->
+              case message of
+                MsgRejected (Just "dead-night") "DeadPlayer" _ -> True
+                _ -> False
+            case nightRejected of
+              MsgRejected _ code _ -> code `shouldBe` "DeadPlayer"
+              _ -> fail "Nguoi da chet van thuc hien NightAction duoc"
+
+          finalState <- atomically (readTVar (roomState room))
+          finalVersion <- atomically (readTVar (roomVersion room))
+          length (gameVotes finalState) `shouldBe` 0
+          length (gameNightActions finalState) `shouldBe` 0
+          finalVersion `shouldBe` versionBeforeRejectedActions
+
+      it "host roi thi chuyen host va nguoi cuoi roi thi don RoomRuntime" $
+        withTestTimeout $
+          WS.runClient "127.0.0.1" serverPort "/" $ \hostConnection -> do
+            hostId <- createRoom hostConnection "ROOM-LEAVE-CLEANUP"
+
+            WS.runClient "127.0.0.1" serverPort "/" $ \memberConnection -> do
+              memberId <- joinRoom memberConnection "ROOM-LEAVE-CLEANUP"
+
+              sendMessage hostConnection
+                (ClientLeave "leave-host" "ROOM-LEAVE-CLEANUP")
+              hostReply <- receiveUntil hostConnection $ \message ->
+                message == MsgPlayerLeft "ROOM-LEAVE-CLEANUP" hostId
+              hostReply `shouldBe`
+                MsgPlayerLeft "ROOM-LEAVE-CLEANUP" hostId
+
+              memberSawLeave <- receiveUntil memberConnection $ \message ->
+                message == MsgPlayerLeft "ROOM-LEAVE-CLEANUP" hostId
+              memberSawLeave `shouldBe`
+                MsgPlayerLeft "ROOM-LEAVE-CLEANUP" hostId
+
+              memberSawHostChange <- receiveUntil memberConnection $ \message ->
+                message == MsgHostChanged "ROOM-LEAVE-CLEANUP" memberId
+              memberSawHostChange `shouldBe`
+                MsgHostChanged "ROOM-LEAVE-CLEANUP" memberId
+
+              roomAfterHostLeft <- requireRoom registry "ROOM-LEAVE-CLEANUP"
+              stateAfterHostLeft <- atomically (readTVar (roomState roomAfterHostLeft))
+              gameHost stateAfterHostLeft `shouldBe` memberId
+              map playerId (gamePlayers stateAfterHostLeft) `shouldBe` [memberId]
+
+              sendMessage memberConnection
+                (ClientLeave "leave-last-member" "ROOM-LEAVE-CLEANUP")
+              memberReply <- receiveUntil memberConnection $ \message ->
+                message == MsgPlayerLeft "ROOM-LEAVE-CLEANUP" memberId
+              memberReply `shouldBe`
+                MsgPlayerLeft "ROOM-LEAVE-CLEANUP" memberId
+
+              removed <- findRoom registry "ROOM-LEAVE-CLEANUP"
+              case removed of
+                Nothing -> pure ()
+                Just _ -> expectationFailure
+                  "Nguoi cuoi da roi nhung RoomRuntime van con trong registry"
+
+              -- Ma phong phai dung lai duoc ngay sau khi runtime cu da duoc don.
+              sendMessage memberConnection
+                (ClientCreateRoom
+                  "recreate-after-cleanup"
+                  "ROOM-LEAVE-CLEANUP"
+                  "NewHost")
+              recreated <- receiveUntil memberConnection isLobbySnapshot
+              case recreated of
+                MsgLobbySnapshot "ROOM-LEAVE-CLEANUP" newHostId actualHost players -> do
+                  actualHost `shouldBe` newHostId
+                  length players `shouldBe` 1
+                _ -> fail "Khong tao lai duoc ma phong sau khi cleanup"
 
       it "reconnect giua Day nhan dung thoi gian con lai, khong reset 3 phut" $
         withTestTimeout $ do
