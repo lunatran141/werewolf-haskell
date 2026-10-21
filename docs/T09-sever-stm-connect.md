@@ -39,6 +39,7 @@ Các yêu cầu chính:
 
 - `leaveAndPrune` gửi lệnh Leave trước khi khóa `registryRooms`; một worker chậm không giữ khóa registry trong thời gian chờ.
 - Chỉ xóa phòng nếu registry vẫn trỏ tới cùng runtime, state vẫn rỗng và queue lệnh đã rỗng.
+- Khi Host rời, Domain chuyển quyền Host cho thành viên còn lại và phát `PlayerLeft` rồi `HostChanged`. Khi người cuối cùng rời, runtime được gỡ khỏi registry, worker kết thúc vì phòng rỗng và mã phòng có thể được tạo lại.
 
 ---
 
@@ -78,10 +79,13 @@ Browser command (requestId, roomId)
 | Reconnect snapshot | Kết nối lại bằng token | Nhận snapshot hiện tại và RoomVersion mới; không gửi `lastVersion` |
 | Queue gửi đầy | Hàng đợi outbound tràn | Đánh dấu overflow, đóng socket và reconnect để nhận snapshot |
 | Retry sau timeout/mất kết nối | Gửi lại cùng command sau reconnect | Giữ nguyên requestId; command đã commit không phát sinh hiệu ứng thứ hai |
+| Retry NightAction/Vote qua socket | Ngắt kết nối sau lần gửi thành công rồi reconnect và gửi lại cùng requestId | Trả `DuplicateRequest`; action/vote chỉ có một bản ghi và roomVersion không tăng |
 | Worker phòng chậm | Join vào phòng chậm trong khi thao tác phòng khác | Phòng khác vẫn xử lý do khóa registry đã được nhả trước khi chờ worker |
 | Hụt version | Client nhận version không liên tục | Đóng socket và tự reconnect để nhận snapshot |
 | Private-state reconnect | Reconnect khi đang Night sau hành động Seer/Witch hoặc sau khi khóa phiếu Sói | Chỉ actor được quyền nhận kết quả tương ứng; trạng thái hành động được phục hồi |
-| Rời phòng | Worker xử lý Leave trong lúc các phòng khác đang hoạt động | Không giữ khóa registry chung trong lúc chờ worker |
+| Rời phòng và cleanup | Host rời rồi người cuối cùng rời | Chuyển Host đúng người; xóa runtime phòng rỗng và cho phép dùng lại mã phòng |
+| Chat Day 1 → Day 2 | Gửi chat Ngày 1, chuyển sang Ngày 2 rồi reconnect | Snapshot còn đúng một tin Ngày 1, đúng room/channel/sender và không nhân đôi |
+| Người chết reconnect | Đánh dấu actor chết rồi reconnect | Vẫn đọc lịch sử PublicDay; Chat/Vote/NightAction đều trả `DeadPlayer`, không đổi state/version |
 | Chat replay | Nhận trực tiếp và từ snapshot lịch sử | UI không hiển thị trùng message theo sequence |
 
 ---
@@ -97,7 +101,7 @@ Browser command (requestId, roomId)
 | `src/Protocol/Types.hs` | JSON message `RoomVersion` |
 | `web/app.js` | Lưu cursor cục bộ để dò khoảng trống; retry command giữ nguyên requestId sau timeout/reconnect |
 | `test/ServerGameLoopSpec.hs` | Idempotency Join, queue đầy và phát hiện outbound overflow |
-| `test/T05WebSocketSpec.hs` | Join vào worker treo không chặn phòng khác; reconnect qua socket thật và phục hồi dữ liệu riêng |
+| `test/T05WebSocketSpec.hs` | Join không chặn phòng khác; phục hồi Day 2/chat/private state; retry NightAction/Vote; quyền người chết; chuyển Host và cleanup phòng qua socket thật |
 | `test/T06UiSpec.cjs`, `test/T07UiSpec.cjs` | Hành vi UI, reconnect token, giữ nguyên requestId khi gửi lại và dò khoảng trống version |
 | `.github/workflows/ci.yml` | Chạy kiểm tra cú pháp và UI test bằng Node.js trong CI |
 
@@ -125,7 +129,7 @@ Kết quả trên Windows với GHC 9.6.6 và Cabal 3.16.1.0:
 |---|---|
 | `cabal build all --enable-tests -j1` | PASS |
 | `cabal test all --enable-tests --test-show-details=direct -j1` | PASS, toàn bộ 14 test suite |
-| T05 WebSocket/reconnect | PASS, 13 examples |
+| T05 WebSocket/reconnect | PASS, 17 examples |
 | Server GameLoop | PASS, 25 examples |
 | Browser UI | PASS, 37 tests |
 | `node --check web/app.js` | PASS |
