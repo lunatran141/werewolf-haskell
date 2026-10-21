@@ -58,8 +58,41 @@ function setup(role = 'Villager', savedSession = null) {
       getElementById: get, createElement: () => new Element(), createTextNode: value => value}
   });
   vm.runInContext(readFileSync(join(__dirname, '../web/avatar.js'), 'utf8'), context);
+  for (const file of ['protocol.js', 'state.js', 'ui.js']) {
+    vm.runInContext(readFileSync(join(__dirname, '../web', file), 'utf8'), context);
+  }
   vm.runInContext(readFileSync(join(__dirname, '../web/app.js'), 'utf8'), context);
-  const message = data => connection.listeners.message({data: JSON.stringify(data)});
+  let currentRole = role;
+  let currentPhase = 'Lobby';
+  let currentDay = 0;
+  let version = 0;
+  let wolfTeam = [];
+  const rawMessage = data => connection.listeners.message({data: JSON.stringify(data)});
+  const sendTargets = (data = {}) => {
+    const list = data.players ?? players;
+    const alive = list.filter(player => player.alive);
+    let ids = alive.filter(player => player.playerId !== 'p1').map(player => player.playerId);
+    const action = data.canShoot ? 'HunterShot' : currentPhase === 'Voting'
+      ? 'Vote' : currentPhase === 'Night' ? ({Werewolf: 'WolfTarget', Seer: 'SeerTarget',
+        Guard: 'GuardTarget', Witch: 'WitchPoison'})[currentRole] : null;
+    if (action === 'WolfTarget') ids = ids.filter(id => !wolfTeam.includes(id));
+    if (action === 'GuardTarget') ids = alive.map(player => player.playerId);
+    rawMessage({type: 'ValidTargetsSnapshot', roomId: 'R', phase: currentPhase,
+      day: currentDay, version: ++version,
+      targets: action ? [{action, playerIds: data.hasVoted ? [] : ids}] : []});
+  };
+  const message = data => {
+    rawMessage(data);
+    if (data.type === 'YourRole') currentRole = data.role;
+    if (data.type === 'WolfTeam') wolfTeam = data.playerIds;
+    if (data.type === 'VotingSnapshot') {
+      currentPhase = data.phase; currentDay = data.day;
+      if (currentPhase !== 'Lobby') sendTargets(data);
+    }
+    if (data.type === 'CommandRejected' && data.requestId === connection.sent.at(-1)?.requestId) {
+      sendTargets();
+    }
+  };
   connection.listeners.open();
   const players = [{playerId: 'p1', displayName: 'Một', alive: true},
     {playerId: 'p2', displayName: 'Hai', alive: true}];
@@ -67,7 +100,7 @@ function setup(role = 'Villager', savedSession = null) {
   message({type: 'YourRole', roomId: 'R', role});
   message({type: 'VotingSnapshot', roomId: 'R', phase: 'Day', day: 1,
     players, hasVoted: false, canShoot: false, resolved: false, result: null});
-  return {get, message, get connection() { return connection; }, connections, timers, players, storage};
+  return {get, message, rawMessage, get connection() { return connection; }, connections, timers, players, storage};
 }
 
 test('Trình duyệt dùng token đã lưu để reconnect đúng phòng', () => {
@@ -175,10 +208,12 @@ test('Lịch sử chat tách theo ngày, theo kênh và khử tin trùng sequenc
   get('chat-wolves-tab').fire('click');
   message({type: 'ChatMessage', roomId: 'R', playerId: 'p1', message: 'Mục tiêu B',
     channel: 'WolvesNight', day: 1, sequence: 3});
+  assert.equal(get('chat-heading').textContent, 'Chat Sói · Đêm 2');
+  assert.equal(get('chat-input').disabled, true, 'Chat Sói không gửi trong pha Day');
+  get('chat-day-select').value = '1'; get('chat-day-select').fire('change');
   assert.equal(get('chat-heading').textContent, 'Chat Sói · Đêm 1');
   assert.equal(get('chat-messages').children.length, 2);
   assert.equal(get('chat-messages').children[0].textContent, 'Đêm 1');
-  assert.equal(get('chat-input').disabled, true, 'Chat Sói không gửi trong pha Day');
 });
 
 test('Sói còn sống gửi được chat riêng trong Night với channel WolvesNight', () => {
@@ -479,4 +514,33 @@ test('Khả năng của tôi ưu tiên nội dung riêng từ YourRole của Ser
   assert.match(get('role-help-text').textContent, /Mô tả từ server/);
   assert.match(get('role-help-text').textContent, /Giai đoạn: Ban đêm/);
   assert.match(get('role-help-text').textContent, /Chọn người khác/);
+});
+
+test('Chat trở về ngày hiện tại sau khi đổi kênh hoặc bước sang Day mới', () => {
+  const {get, message, players} = setup('Werewolf');
+  message({type: 'ChatMessage', roomId: 'R', day: 1, channel: 'PublicDay',
+    messageId: 'system-day-1', sequence: 1, senderId: '__system__',
+    text: 'Kết quả bỏ phiếu ngày 1'});
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 2,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  assert.equal(get('chat-day-select').value, '1', 'vẫn xem được kết quả ngày trước');
+
+  get('chat-wolves-tab').fire('click');
+  assert.equal(get('chat-day-select').value, '2');
+  assert.equal(get('chat-input').disabled, false, 'Sói gửi được tin ở đêm hiện tại');
+  get('chat-day-select').value = '1';
+  get('chat-day-select').fire('change');
+  assert.equal(get('chat-input').disabled, true, 'xem lịch sử thì không gửi tin');
+
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Day', day: 2,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  assert.equal(get('chat-day-select').value, '2', 'Day mới tự chọn ngày hiện tại');
+  get('chat-public-tab').fire('click');
+  assert.equal(get('chat-input').disabled, false, 'chat chung gửi được ở Day mới');
+
+  get('chat-day-select').value = '1';
+  get('chat-day-select').fire('change');
+  assert.match(get('chat-messages').children[1].textContent, /Kết quả bỏ phiếu ngày 1/);
+  get('chat-public-tab').fire('click');
+  assert.equal(get('chat-day-select').value, '2', 'bấm lại tab đưa về ngày hiện tại');
 });

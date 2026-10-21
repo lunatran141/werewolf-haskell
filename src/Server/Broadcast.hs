@@ -11,6 +11,7 @@ module Server.Broadcast
   , chatMessageForState
   , wolfTeamMessage
   , privateActionStateMessage
+  , validTargetsSnapshot
   , discussionSkipStateMessage
   ) where
 
@@ -28,10 +29,14 @@ import Domain.Types
   , PlayerId
   , Role(..)
   , LifeStatus(..)
+  , Phase(..)
+  , NightChoice(..)
   , Team
   , eventVisibility
   , teamOfRole
   )
+
+import Domain.Validation (validNightTargets, validateVote, validateHunterShot)
 
 import Protocol.Types
   ( PlayerView(..)
@@ -117,6 +122,32 @@ privateActionStateMessage rid actor state =
     actorHasRole role = any
       (\player -> playerId player == actor && playerRole player == Just role)
       (gamePlayers state)
+
+-- Mỗi người chỉ nhận danh sách tính từ quyền và trạng thái thật của chính mình.
+validTargetsSnapshot :: RoomId -> PlayerId -> Int -> GameState -> ServerMessage
+validTargetsSnapshot rid actor version state =
+  MsgValidTargetsSnapshot rid (gamePhase state) (gameDay state) version targets
+  where
+    candidates = map playerId (gamePlayers state)
+    validBy check = [pid | pid <- candidates, check pid == Right ()]
+    actorRole = [playerRole p | p <- gamePlayers state, playerId p == actor]
+    targetList action mkChoice = [(action, validNightTargets state actor mkChoice)]
+    hunterTargets = [("HunterShot", validBy (validateHunterShot state actor . Just))]
+    targets = case gamePhase state of
+      Night
+        | gamePendingHunter state == Just actor -> hunterTargets
+        | otherwise -> case actorRole of
+            [Just Werewolf] -> targetList "WolfTarget" WolfTarget
+            [Just Seer] -> targetList "SeerTarget" SeerTarget
+            [Just Guard] -> targetList "GuardTarget" GuardTarget
+            [Just Witch] -> targetList "WitchPoison" WitchPoison
+            _ -> []
+      Voting
+        | gamePendingHunter state == Just actor -> hunterTargets
+        | null (gamePendingReveals state) ->
+            [("Vote", validBy (validateVote state actor))]
+        | otherwise -> []
+      _ -> []
 
 discussionSkipStateMessage :: RoomId -> PlayerId -> GameState -> ServerMessage
 discussionSkipStateMessage rid actor state =

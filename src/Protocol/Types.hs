@@ -142,6 +142,7 @@ data ServerMessage
   | MsgDiscussionSkipState RoomId Int Int Bool
   -- Snapshot rieng cho chinh actor; khong dua vao Lobby/Voting snapshot cong khai.
   | MsgPrivateActionState RoomId Bool (Maybe Bool) (Maybe Bool) (Maybe String)
+  | MsgValidTargetsSnapshot RoomId Phase Int Int [(String, [String])]
   | MsgChatMessage RoomId String String
   | MsgChannelChatMessage RoomId Int ChatChannel String String
   | MsgStoredChatMessage RoomId ChatRecord
@@ -675,6 +676,20 @@ instance FromJSON ServerMessage where
           <*> obj .: "total"
           <*> obj .: "hasSkipped"
 
+      "ValidTargetsSnapshot" -> do
+        phase <- obj .: "phase" >>= parsePhase
+        entries <- obj .: "targets"
+        targets <- mapM
+          (withObject "ActionTargets" $ \entry ->
+            (,) <$> entry .: "action" <*> entry .: "playerIds")
+          entries
+        MsgValidTargetsSnapshot
+          <$> obj .: "roomId"
+          <*> pure phase
+          <*> obj .: "day"
+          <*> obj .: "version"
+          <*> pure targets
+
       "PrivateActionState" ->
         MsgPrivateActionState
           <$> obj .: "roomId"
@@ -969,6 +984,19 @@ instance ToJSON ServerMessage where
           , "submitted" .= submitted
           , "total" .= total
           , "hasSkipped" .= hasSkipped
+          ]
+
+      MsgValidTargetsSnapshot roomId phase day version targets ->
+        object
+          [ "type" .= ("ValidTargetsSnapshot" :: String)
+          , "roomId" .= roomId
+          , "phase" .= show phase
+          , "day" .= day
+          , "version" .= version
+          , "targets" .=
+              [ object ["action" .= action, "playerIds" .= playerIds]
+              | (action, playerIds) <- targets
+              ]
           ]
 
       MsgPrivateActionState roomId submitted healReady poisonReady lastProtected ->
