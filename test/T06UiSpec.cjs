@@ -23,7 +23,8 @@ function setup() {
     append(...children) { this.children.push(...children); }
     addEventListener(type, handler) { this.listeners[type] = handler; }
     setAttribute(name, value) { this.attributes[name] = value; }
-    fire(type) { this.listeners[type]({preventDefault() {}}); }
+    focus() { this.focused = true; }
+    fire(type, fields = {}) { this.listeners[type]({preventDefault() {}, ...fields}); }
     querySelector() { return new Element(); }
   }
   const elements = new Map();
@@ -58,8 +59,38 @@ function setup() {
     createElement: () => new Element()
   }});
   vm.runInContext(readFileSync(join(__dirname, '../web/avatar.js'), 'utf8'), context);
+  for (const file of ['protocol.js', 'state.js', 'ui.js']) {
+    vm.runInContext(readFileSync(join(__dirname, '../web', file), 'utf8'), context);
+  }
   vm.runInContext(readFileSync(join(__dirname, '../web/app.js'), 'utf8'), context);
-  const message = data => connection.listeners.message({data: JSON.stringify(data)});
+  let currentRole = null;
+  let currentPhase = 'Lobby';
+  let currentDay = 0;
+  let version = 0;
+  const rawMessage = data => connection.listeners.message({data: JSON.stringify(data)});
+  const sendTargets = (data = {}) => {
+    const list = data.players ?? players;
+    const alive = list.filter(player => player.alive);
+    const otherIds = alive.filter(player => player.playerId !== 'p1').map(player => player.playerId);
+    const action = data.canShoot ? 'HunterShot' : currentPhase === 'Voting'
+      ? 'Vote' : currentPhase === 'Night' ? ({Werewolf: 'WolfTarget', Seer: 'SeerTarget',
+        Guard: 'GuardTarget', Witch: 'WitchPoison'})[currentRole] : null;
+    const ids = action === 'GuardTarget' ? alive.map(player => player.playerId) : otherIds;
+    rawMessage({type: 'ValidTargetsSnapshot', roomId: 'R', phase: currentPhase,
+      day: currentDay, version: ++version,
+      targets: action ? [{action, playerIds: data.hasVoted ? [] : ids}] : []});
+  };
+  const message = data => {
+    rawMessage(data);
+    if (data.type === 'YourRole') currentRole = data.role;
+    if (data.type === 'VotingSnapshot' && data.roomId === 'R') {
+      currentPhase = data.phase; currentDay = data.day;
+      if (currentPhase !== 'Lobby') sendTargets(data);
+    }
+    if (data.type === 'CommandRejected' && data.requestId === connection.sent.at(-1)?.requestId) {
+      sendTargets();
+    }
+  };
   connection.listeners.open();
   const players = [
     {playerId: 'p1', displayName: 'Một', alive: true},
@@ -72,7 +103,7 @@ function setup() {
   snapshot();
   const choose = () => { get('vote-target').value = 'p2'; get('vote-target').fire('change'); };
   const advance = ms => { now += ms; for (const callback of [...intervals.values()]) callback(); };
-  return {get, connection, message, snapshot, choose, advance};
+  return {get, connection, message, rawMessage, snapshot, choose, advance};
 }
 
 test('Sao chớp độc lập và đồng hồ Voting 60 giây không reset khi có snapshot mới', () => {
@@ -99,6 +130,17 @@ test('Dashboard có 9 ô từ snapshot thật và chỉ ô của mình hiện va
   message({type: 'YourRole', roomId: 'R', role: 'Seer'});
   assert.equal(grid.children[0].children.some(child => child.textContent === 'Tiên Tri'), true);
   assert.equal(grid.children[1].children.some(child => child.textContent === 'Tiên Tri'), false);
+});
+
+test('Bỏ phiếu trên ô bằng bàn phím giữ focus và giải thích ô bị khóa', () => {
+  const {get} = setup();
+  const grid = get('player-list');
+  assert.match(grid.children[0].children.find(child => child.className === 'dashboard-card-footer').textContent, /Không chọn chính mình/);
+  assert.match(grid.children[2].children.find(child => child.className === 'dashboard-card-footer').textContent, /Đã bị loại/);
+  grid.children[1].fire('keydown', {key: 'Enter'});
+  assert.equal(get('vote-target').value, 'p2');
+  assert.equal(grid.children[1].focused, true);
+  assert.equal(grid.children[1].attributes['aria-pressed'], 'true');
 });
 
 test('Nút tạo phòng chuyển đúng chế độ và avatar dùng SVG từ folder UI', () => {
@@ -138,6 +180,8 @@ test('Từ chối có thông báo và cho thử lại; sai phòng bị bỏ qua'
   choose(); get('vote-form').fire('submit');
   message({type: 'CommandRejected', requestId: connection.sent[0].requestId, message: 'Mục tiêu sai'});
   assert.equal(get('message').textContent, 'Mục tiêu sai');
+  assert.equal(get('vote-target').disabled, false);
+  choose();
   assert.equal(get('vote-button').disabled, false);
   snapshot({roomId: 'OTHER', hasVoted: true});
   assert.equal(get('vote-button').disabled, false);
@@ -182,7 +226,9 @@ test('Sai phase, người chết và mất kết nối đều khóa thao tác', 
   assert.equal(get('vote-button').disabled, true);
   assert.match(get('connection-status').textContent, /Mất kết nối/);
   assert.equal(get('voting-section').hidden, true);
-  assert.equal(get('join-section').hidden, false);
+  assert.equal(get('join-section').hidden, true);
+  assert.equal(get('lobby-section').hidden, false);
+  assert.equal(get('player-list').children.length, 9);
 });
 
 test('Giữ StartGame và Night UI của T05 sau khi ghép Voting', () => {
@@ -224,4 +270,28 @@ test('Hunter dùng cùng nút bắn ở Night và Voting, phản hồi có hunte
     message({type: 'HunterShotResolved', roomId: 'R', hunterId: 'p1', targetId: 'p2'});
     assert.equal(get('hunter-pass').disabled, true);
   }
+});
+
+test('Ô mục tiêu chờ danh sách riêng từ Server và bỏ snapshot cũ', () => {
+  const {get, rawMessage, message, connection} = setup();
+  rawMessage({type: 'VotingSnapshot', roomId: 'R', phase: 'Day', day: 2,
+    players: [{playerId: 'p1', displayName: 'Một', alive: true},
+      {playerId: 'p2', displayName: 'Hai', alive: true}],
+    hasVoted: false, canShoot: false, resolved: false, result: null});
+  rawMessage({type: 'VotingSnapshot', roomId: 'R', phase: 'Voting', day: 2,
+    players: [{playerId: 'p1', displayName: 'Một', alive: true},
+      {playerId: 'p2', displayName: 'Hai', alive: true}],
+    hasVoted: false, canShoot: false, resolved: false, result: null});
+  assert.equal(get('vote-target').disabled, true);
+  assert.deepEqual(get('vote-target').children.map(option => option.value), ['']);
+  rawMessage({type: 'ValidTargetsSnapshot', roomId: 'R', phase: 'Voting', day: 1,
+    version: 99, targets: [{action: 'Vote', playerIds: ['p2']}]});
+  assert.equal(get('vote-target').disabled, true, 'snapshot vòng cũ không mở quyền');
+  message({type: 'ValidTargetsSnapshot', roomId: 'R', phase: 'Voting', day: 2,
+    version: 100, targets: [{action: 'Vote', playerIds: ['p2']}]});
+  assert.equal(get('vote-target').disabled, false);
+  assert.deepEqual(get('vote-target').children.map(option => option.value), ['', 'p2']);
+  get('vote-target').value = 'p2'; get('vote-target').fire('change');
+  get('vote-form').fire('submit');
+  assert.equal(connection.sent.at(-1).targetId, 'p2');
 });

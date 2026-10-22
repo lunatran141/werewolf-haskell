@@ -7,7 +7,7 @@ import Data.Aeson (eitherDecode, encode)
 import Domain.Types
 import Protocol.Json (decodeClientMessage, encodeServerMessage)
 import Protocol.Types
-import Server.Broadcast (nightMessagesFor, votingSnapshot)
+import Server.Broadcast (nightMessagesFor, votingSnapshot, validTargetsSnapshot)
 import Test.Hspec
 
 main :: IO ()
@@ -61,6 +61,23 @@ main = hspec $ do
           players = [VotingPlayerView "p1" "Một" False, VotingPlayerView "p2" "Hai" True]
       votingSnapshot "R" "p2" state `shouldBe` MsgVotingSnapshot "R" Voting 1 players False False True Nothing
       votingSnapshot "R" "p1" state `shouldBe` MsgVotingSnapshot "R" Voting 1 players True True True Nothing
+
+    it "Danh sach muc tieu rieng khong cho Soi can dong doi, Voting van cho phep" $ do
+      let players =
+            [ Player "w1" "Wolf One" (Just Werewolf) True Alive defaultAppearance
+            , Player "w2" "Wolf Two" (Just Werewolf) True Alive defaultAppearance
+            , Player "v1" "Villager" (Just Villager) True Alive defaultAppearance
+            ]
+          night = emptyLobby {gamePhase = Night, gameDay = 1, gamePlayers = players}
+          voting = night {gamePhase = Voting}
+          nightTargets = MsgValidTargetsSnapshot "R" Night 1 7
+            [("WolfTarget", ["v1"])]
+          voteTargets = MsgValidTargetsSnapshot "R" Voting 1 8
+            [("Vote", ["w2", "v1"])]
+      validTargetsSnapshot "R" "w1" 7 night `shouldBe` nightTargets
+      validTargetsSnapshot "R" "w1" 8 voting `shouldBe` voteTargets
+      map (eitherDecode . encodeServerMessage) [nightTargets, voteTargets]
+        `shouldBe` map Right [nightTargets, voteTargets]
 
     it "VoteUpdated chi gui receipt cho voter va khong leak target" $ do
       let event = VoteUpdated "p1" "p7"

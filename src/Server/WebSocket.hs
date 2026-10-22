@@ -95,6 +95,7 @@ import Server.Broadcast
   , chatMessageForState
   , wolfTeamMessage
   , privateActionStateMessage
+  , validTargetsSnapshot
   , discussionSkipStateMessage
   )
 
@@ -354,7 +355,9 @@ beginSession room actor sessionRef outbound = do
       else pure ()
 
     if gamePhase state /= Lobby
-      then enqueueSTM (votingSnapshot (roomId room) actor state)
+      then do
+        enqueueSTM (votingSnapshot (roomId room) actor state)
+        enqueueSTM (validTargetsSnapshot (roomId room) actor version state)
       else pure ()
 
     if gamePhase state == Day
@@ -438,6 +441,8 @@ beginSession room actor sessionRef outbound = do
     if gamePhase (updateState update) /= Lobby
       then do
         sendToClient outbound (votingSnapshot (roomId room) actor (updateState update))
+        sendToClient outbound
+          (validTargetsSnapshot (roomId room) actor (updateVersion update) (updateState update))
         if gamePhase (updateState update) == Day
           then sendToClient outbound
             (discussionSkipStateMessage (roomId room) actor (updateState update))
@@ -951,11 +956,12 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
 
               case result of
 
-                Left err ->
+                Left err -> do
 
                   sendToClient outbound
 
                     (nightActionErrorReply requestId err)
+                  sendFreshTargets room actor
 
                 Right _ ->
 
@@ -989,6 +995,14 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
     ClientSkipDiscussion requestId rid ->
       handlePlayerCommand requestId rid (SkipDiscussion actor)
   where
+    sendFreshTargets room recipient = do
+      (freshState, freshVersion) <- atomically $ do
+        currentState <- readTVar (roomState room)
+        currentVersion <- readTVar (roomVersion room)
+        pure (currentState, currentVersion)
+      sendToClient outbound
+        (validTargetsSnapshot (roomId room) recipient freshVersion freshState)
+
     handlePlayerCommand requestId rid command = do
       currentActor <- readIORef actorRef
       current <- readIORef sessionRef
@@ -1007,12 +1021,13 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
               result <- submitCommand room requestId currentActor command
 
               case result of
-                Left err ->
+                Left err -> do
                   sendToClient outbound
                     (MsgRejected
                       (Just requestId)
                       (show err)
                       ("Yêu cầu bị từ chối: " ++ show err))
+                  sendFreshTargets room currentActor
 
                 Right _ ->
                   -- Receipt theo requestId để UI chỉ kết thúc đúng yêu cầu đang chờ.
