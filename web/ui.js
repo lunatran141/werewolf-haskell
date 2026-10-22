@@ -695,11 +695,8 @@ function renderNight() {
   el.witchPanel.hidden = role !== "Witch";
 
   el.nightWaitingPanel.hidden =
-    role === "Werewolf" ||
-    role === "Seer" ||
-    role === "Guard" ||
-    role === "Witch" ||
-    role === "Hunter";
+    ["Werewolf", "Seer", "Guard", "Witch"].includes(role) ||
+    state.hunterPending;
 
   renderNightTargets();
 
@@ -749,6 +746,9 @@ function renderNight() {
   } else if (role === "Witch" && !state.witchVictimResolved) {
     el.nightStatus.textContent =
       "Đang chờ tất cả Sói chốt mục tiêu trước khi Phù Thủy hành động.";
+  } else if (role === "Hunter") {
+    el.nightStatus.textContent =
+      "Bạn không có hành động ban đêm. Quyền bắn chỉ mở sau khi bạn bị loại và Server xác nhận.";
   } else {
     el.nightStatus.textContent =
       "Hãy chọn hành động phù hợp với vai trò.";
