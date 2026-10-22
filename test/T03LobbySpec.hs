@@ -1,12 +1,17 @@
 module Main (main) where
 
+import Data.List (nub)
 import Domain.Engine (applyLobbyCommand)
 import Domain.Types
+import Domain.Validation (validateGameInvariant)
 import GHC.IO.Encoding (utf8)
 import System.IO (hSetEncoding, stderr, stdout)
 import Test.Hspec (Spec, describe, hspec, it, shouldBe)
+import Test.QuickCheck
+  ( Gen, arbitrary, counterexample, elements, forAll
+  , listOf, oneof, property, resize
+  )
 
--- Tạo state mẫu. Nếu bước chuẩn bị thất bại, test sẽ báo lỗi.
 mustRight :: Show e => Either e a -> a
 mustRight result =
   case result of
@@ -30,6 +35,37 @@ ninePlayers =
         (mustRight
           (applyLobbyCommand state
             (Join ("p" ++ show n) ("Name" ++ show n))))
+
+-- Sinh cả lệnh hợp lệ và lệnh có thể bị từ chối:
+-- ID p10/p11 có thể làm phòng vượt quá 9 người;
+-- Leave/SetReady có thể nhắm vào người chưa tham gia.
+genLobbyCommand :: Gen Command
+genLobbyCommand = do
+  pid <- elements ["p" ++ show n | n <- [1 :: Int .. 11]]
+  oneof
+    [ pure (Join pid ("Name " ++ pid))
+    , pure (Leave pid)
+    , SetReady pid <$> arbitrary
+    ]
+
+-- Lệnh bị từ chối không làm thay đổi state.
+lobbyStates :: [Command] -> [GameState]
+lobbyStates = scanl next emptyLobby
+  where
+    next state command =
+      case applyLobbyCommand state command of
+        Right (newState, _) -> newState
+        Left _              -> state
+
+lobbyStateOk :: GameState -> Bool
+lobbyStateOk state =
+  let ids = map playerId (gamePlayers state)
+  in length ids <= 9
+     && length ids == length (nub ids)
+     && (if null ids
+           then gameHost state == ""
+           else gameHost state == head ids)
+     && validateGameInvariant state == Right ()
 
 main :: IO ()
 main = do
@@ -127,3 +163,9 @@ lobbyTests = describe "T03 Lobby" $ do
     gameHost state `shouldBe` "p1"
     map playerId (gamePlayers state) `shouldBe` ["p1"]
     events `shouldBe` [PlayerLeft "p2"]
+
+  it "QuickCheck: chuoi Join/Leave/Ready giu Lobby hop le" $
+    property $
+      forAll (resize 50 (listOf genLobbyCommand)) $ \commands ->
+        let states = lobbyStates commands
+        in counterexample (show commands) (all lobbyStateOk states)

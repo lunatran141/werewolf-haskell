@@ -547,3 +547,28 @@ test('Chat trở về ngày hiện tại sau khi đổi kênh hoặc bước san
   get('chat-public-tab').fire('click');
   assert.equal(get('chat-day-select').value, '2', 'bấm lại tab đưa về ngày hiện tại');
 });
+
+test('Bong bóng chat tự ẩn sau timer, lịch sử chat vẫn còn', () => {
+  const {get, message, timers} = setup();
+
+  message({
+    type: 'ChatMessage', roomId: 'R', day: 1,
+    channel: 'PublicDay', messageId: 'm-timer', sequence: 10,
+    playerId: 'p2', message: 'Tin cần tự ẩn'
+  });
+
+  const hasBubble = () =>
+    get('player-list').children[1].children.some(
+      child => child.className === 'dashboard-chat-bubble'
+    );
+
+  assert.equal(hasBubble(), true);
+  timers.at(-1)(); // Giả lập timer 5 giây trong setup()
+  assert.equal(hasBubble(), false);
+  assert.ok(
+    get('chat-messages').children.some(
+      line => line.children.includes('Tin cần tự ẩn')
+    ),
+    'Ẩn bong bóng không được xóa lịch sử chat'
+  );
+});

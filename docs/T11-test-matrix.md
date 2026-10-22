@@ -24,7 +24,7 @@ Mục tiêu chính bao gồm:
 | Thành viên | Trách nhiệm chính (Own Components) | Test Suite sở hữu | Kiểm thử chéo (Cross-Review) |
 | :--- | :--- | :--- | :--- |
 | **TV1** | Domain Types, ADT, Lobby State | `DomainT02Spec.hs`, `T03LobbySpec.hs` | Review WebSocket/Connection của TV3 |
-| **TV2** *(Hiện tại)* | Phase Engine, STM Concurrency, GameLoop | `ServerGameLoopSpec.hs`, `T04PhaseSpec.hs` | **Review Protocol JSON & Sync Messages** (`ProtocolLobbySpec.hs`)\\n**Lead T11 Property & Replay** (`T11PropertyReplaySpec.hs`) |
+| **TV2** *(Hiện tại)* | Phase Engine, STM Concurrency, GameLoop | `ServerGameLoopSpec.hs`, `T04PhaseSpec.hs` | **Review Protocol JSON & Sync Messages** (`ProtocolLobbySpec.hs`)<br>**Lead T11 Property & Replay** (`T11PropertyReplaySpec.hs`) |
 | **TV3** | Night Action Rules, Role Validation, Seeded RNG | `T05NightSpec.hs`, `T05RngSpec.hs`, `T05WebSocketSpec.hs` | Review Lobby State của TV1 |
 | **TV4** | Day Voting, Hunter Pending Chain, UI Core | `DomainT06Spec.hs`, `T06GameLoopSpec.hs`, `T06ProtocolSpec.hs`, `T06WebSocketSpec.hs`, `T06UiSpec.cjs` | Review Night Actions của TV3 |
 | **TV5** | Chat Routing, Win Conditions, Reconnect, UI Polish | `T07WinSpec.hs`, `T07UiSpec.cjs` | Review Day Voting của TV4 |
@@ -111,6 +111,16 @@ Kiểm tra round-trip JSON và đối chiếu schema frontend cho các thông đ
 
 ---
 
+## Kết quả kiểm thử phần TV3 phụ trách
+
+| Phần | Kịch bản | File test | Kết quả | Review chéo |
+| :--- | :--- | :--- | :--- | :--- |
+| **T03** | Join/Leave/Ready; chuỗi lệnh giữ Lobby hợp lệ, tối đa 9 người và Host đúng | `test/T03LobbySpec.hs` | **PASS: 18/18**; QuickCheck 100 lần | Đã tích hợp |
+| **T04** | StartGame 8/9 người; invariant sau Join/Ready và khi chuyển pha | `test/T04PhaseSpec.hs` | **PASS: 24/24**; mỗi property 100 lần | Đã tích hợp |
+| **T10** | Chat, quyền vai, reconnect, bong bóng chat tự ẩn và giữ lịch sử | `test/T07UiSpec.cjs` | **PASS: 29/29** | Đã tích hợp |
+
+---
+
 ## Ma trận kiểm thử tổng hợp (Full Traceability Matrix)
 
 | STT | Test Suite | File Test | Số lượng Test | Trạng thái |
@@ -120,8 +130,8 @@ Kiểm tra round-trip JSON và đối chiếu schema frontend cho các thông đ
 | 3 | `protocol-lobby-test` | `test/ProtocolLobbySpec.hs` | 53 | **PASS** |
 | 4 | `skeleton-test` | `test/Spec.hs` | 1 | **PASS** |
 | 5 | `t02-domain-test` | `test/DomainT02Spec.hs` | 23 | **PASS** |
-| 6 | `t03-lobby-test` | `test/T03LobbySpec.hs` | 17 | **PASS** |
-| 7 | `t04-phase-test` | `test/T04PhaseSpec.hs` | 23 (gồm QuickCheck) | **PASS** |
+| 6 | `t03-lobby-test` | `test/T03LobbySpec.hs` | 18 | **PASS** |
+| 7 | `t04-phase-test` | `test/T04PhaseSpec.hs` | 24 (gồm QuickCheck) | **PASS** |
 | 8 | `t05-night-test` | `test/T05NightSpec.hs` | 27 | **PASS** |
 | 9 | `t05-rng-test` | `test/T05RngSpec.hs` | 8 (gồm QuickCheck) | **PASS** |
 | 10 | `t05-websocket-test` | `test/T05WebSocketSpec.hs` | 13 | **PASS** |
@@ -131,8 +141,8 @@ Kiểm tra round-trip JSON và đối chiếu schema frontend cho các thông đ
 | 14 | `t06-websocket-test` | `test/T06WebSocketSpec.hs` | 7 | **PASS** |
 | 15 | `t07-win-test` | `test/T07WinSpec.hs` | 44 | **PASS** |
 | 16 | Node.js UI Test (T06) | `test/T06UiSpec.cjs` | 18 | **PASS** |
-| 17 | Node.js UI Test (T07) | `test/T07UiSpec.cjs` | 22 | **PASS** |
-| **Tổng cộng** | **15 Haskell Suites + 2 UI Suites** | | **314+ Tests & Properties** | **100% PASS** |
+| 17 | Node.js UI Test (T07 & T10) | `test/T07UiSpec.cjs` | 29 | **PASS** |
+| **Tổng cộng** | **15 Haskell Suites + 2 UI Suites** | | **323+ Tests & Properties** | **100% PASS** |
 
 ---
 
@@ -144,7 +154,7 @@ Chạy toàn bộ cổng kiểm thử tự động trước khi commit hoặc t�
 # 1. Chạy toàn bộ 15 test suite Haskell (bao gồm cả QuickCheck và WebSocket tích hợp)
 cabal test all --enable-tests --test-show-details=direct -j1
 
-# 2. Chạy toàn bộ 40 kiểm thử giao diện người dùng Node.js
+# 2. Chạy toàn bộ 47 kiểm thử giao diện người dùng Node.js
 node --test test/T06UiSpec.cjs test/T07UiSpec.cjs
 
 # 3. Kiểm tra định dạng code và ký tự khoảng trắng

@@ -343,3 +343,15 @@ lobbyStartTests =
                        , not (gameNightResolved night2)
                        , not (gameVotingResolved night2)
                        ]
+    it "Moi buoc Join va Ready cua phong 8/9 nguoi giu invariant" $
+      property $
+        forAll (elements ([8, 9] :: [Int])) $ \count ->
+          let joined = scanl add emptyLobby [1 .. count]
+              add state number =
+                fst (mustRight (applyLobbyCommand state
+                  (Join ("p" ++ show number) ("Nguoi " ++ show number))))
+              readied = scanl mark (last joined)
+                (map playerId (gamePlayers (last joined)))
+              mark state pid =
+                fst (mustRight (applyLobbyCommand state (SetReady pid True)))
+          in all ((== Right ()) . validateGameInvariant) (joined ++ tail readied)
