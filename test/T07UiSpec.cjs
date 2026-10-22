@@ -424,10 +424,13 @@ test('Thợ Săn còn sống không thấy bộ chọn bắn; chỉ mở khi Ser
     players, hasVoted: false, canShoot: false, resolved: false, result: null});
   assert.equal(get('hunter-action-panel').hidden, true);
   assert.equal(get('hunter-choice-panel').hidden, true);
+  assert.equal(get('night-waiting-panel').hidden, false);
+  assert.match(get('night-status').textContent, /không có hành động ban đêm/);
   assert.match(get('hunter-status').textContent, /đang còn sống/);
   message({type: 'HunterShotPending', roomId: 'R'});
   assert.equal(get('hunter-action-panel').hidden, false);
   assert.equal(get('hunter-choice-panel').hidden, false);
+  assert.equal(get('night-waiting-panel').hidden, true);
   assert.equal(get('hunter-pass').disabled, false);
 });
 

@@ -7,6 +7,7 @@ library
   exposed-modules:
       Domain.Engine
     , Domain.Rules
+    , Domain.Replay
     , Domain.Types
     , Domain.Validation
     , Domain.Night
@@ -237,3 +238,16 @@ test-suite t07-win-test
     , hspec >=2.10
     , aeson >=2.1 && <2.3
     , stm >=2.5 && <3
+
+-- T11: property theo chuoi Command va deterministic replay.
+test-suite t11-property-replay-test
+  type: exitcode-stdio-1.0
+  main-is: T11PropertyReplaySpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , werewolf-server
+    , hspec >=2.10
+    , QuickCheck >=2.14
