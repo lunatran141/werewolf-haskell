@@ -39,3 +39,14 @@ git diff --check
 
 Mỗi thành viên cần kiểm tra test phần mình sở hữu và có ít nhất một người khác
 review. Người tổng hợp T11 chạy lại toàn bộ gate trên commit cuối cùng.
+
+
+## Kết quả kiểm thử phần TV3 phụ trách
+
+| Phần | Kịch bản | File test | Kết quả | Review chéo |
+| --- | --- | --- | --- | --- |
+| T03 | Join/Leave/Ready; chuỗi lệnh giữ Lobby hợp lệ, tối đa 9 người và Host đúng | `test/T03LobbySpec.hs` | PASS: 18/18; QuickCheck 100 lần | Chờ thành viên khác review |
+| T04 | StartGame 8/9 người; invariant sau Join/Ready và khi chuyển pha | `test/T04PhaseSpec.hs` | PASS: 24/24; mỗi property 100 lần | Chờ thành viên khác review |
+| T10 | Chat, quyền vai, reconnect, bong bóng chat tự ẩn và giữ lịch sử | `test/T07UiSpec.cjs` | PASS: 29/29 | Chờ thành viên khác review |
+
+Đã chạy `t11-property-replay-test`: PASS 7/7. Đây là phần kiểm thử chung của T11, cần TV5 tổng hợp cùng kết quả của các thành viên khác.

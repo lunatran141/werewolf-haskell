@@ -84,6 +84,7 @@ test-suite t03-lobby-test
       base >=4.17 && <5
     , werewolf-server
     , hspec >=2.10
+    , QuickCheck >=2.14
 
 test-suite t04-phase-test
   type: exitcode-stdio-1.0
