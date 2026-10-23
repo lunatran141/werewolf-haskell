@@ -2,7 +2,11 @@ FROM haskell:9.6.6-slim AS build
 
 WORKDIR /src
 COPY cabal.project werewolf-server.cabal ./
-RUN cabal update && cabal build --only-dependencies --enable-tests
+RUN cabal user-config init --force \
+    && sed -i 's|url: http://hackage.haskell.org/|url: https://hackage.haskell.org/|' /root/.config/cabal/config \
+    && sed -i -E 's|^[[:space:]]*(--[[:space:]]*)?secure:.*|  secure: False|' /root/.config/cabal/config \
+    && cabal update \
+    && cabal build --only-dependencies --enable-tests
 COPY app ./app
 COPY src ./src
 COPY test ./test
