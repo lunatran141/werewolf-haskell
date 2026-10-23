@@ -252,3 +252,19 @@ test-suite t11-property-replay-test
     , werewolf-server
     , hspec >=2.10
     , QuickCheck >=2.14
+
+-- T12: 9 WebSocket clients, reconnect, invalid command va full-game replay.
+test-suite t12-full-game-e2e-test
+  type: exitcode-stdio-1.0
+  main-is: T12FullGameE2ESpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat -threaded
+  build-depends:
+      base >=4.17 && <5
+    , werewolf-server
+    , hspec >=2.10
+    , aeson >=2 && <3
+    , bytestring >=0.11
+    , stm >=2.5 && <3
+    , websockets >=0.12 && <0.14

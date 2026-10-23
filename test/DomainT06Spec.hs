@@ -105,6 +105,25 @@ t06Spec = do
       applyCommand (startedVoting8 {gamePhase = Day}) (Vote "p1" "p7")
         `shouldBe` Left WrongPhase
 
+    it "Du tat ca nguoi con song bo phieu thi chot ngay, khong doi timer" $ do
+      let votingState =
+            withDead ["p2", "p5", "p6", "p8"] startedVoting8
+          afterOne = castVote votingState "p1" "p7"
+          afterTwo = castVote afterOne "p3" "p7"
+          afterThree = castVote afterTwo "p4" "p7"
+          (resolved, finalEvents) =
+            mustRight (applyCommand afterThree (Vote "p7" "p1"))
+      gamePhase afterThree `shouldBe` Voting
+      gamePhase resolved `shouldBe` Night
+      gameDay resolved `shouldBe` 2
+      playerLifeStatus (findById "p7" resolved) `shouldBe` Dead
+      finalEvents `shouldBe`
+        [ VoteUpdated "p7" "p1"
+        , VotingResolved [("p7", 3), ("p1", 1)] (Just "p7")
+        , PlayerDied "p7"
+        , PhaseChanged Night
+        ]
+
   describe "T06 - Resolve Voting va tie/no-vote" $ do
     it "Lynch target duy nhat bi loai va chuyen sang Night ke tiep" $ do
       let voted =

@@ -1,5 +1,4 @@
-// Chạy app.js thật trong DOM giả tối thiểu, không cần cài thư viện Node.
-// Kiểm tra hành vi UI; không thay thế kiểm tra bố cục trên trình duyệt thật.
+
 const {test} = require('node:test');
 const assert = require('node:assert/strict');
 const {readFileSync} = require('node:fs');
