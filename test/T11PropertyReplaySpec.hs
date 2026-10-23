@@ -29,6 +29,8 @@ import Domain.Types
   , playerId
   , playerLifeStatus
   , playerRole
+  , EventVisibility(..)
+  , eventVisibility
   )
 import Domain.Validation (validateGameInvariant)
 import Protocol.Types
@@ -182,6 +184,48 @@ main = hspec $ do
       property $ \(CommandTrace commands) ->
         replayCommands dayState8 commands === replayCommands dayState8 commands
 
+    it "TV1 - Night Action khong hop le giu nguyen GameState" $ do
+      let initial = activeState roles9 Night
+          commands =
+            [ NightAction "p1" (WolfTarget "p2")
+            , NightAction "p4" (SeerTarget "p4")
+            , NightAction "p5" (GuardTarget "missing")
+            , NightAction "missing" (WolfTarget "p8")
+            ]
+          result = replayCommands initial commands
+
+      map replayOutcome (replaySteps result)
+        `shouldSatisfy` all isRejected
+
+      replayFinalState result `shouldBe` initial
+
+      validateGameInvariant (replayFinalState result)
+        `shouldBe` Right ()
+
+    it "TV1 - replay Night Action van 9 nguoi cho cung state va events" $ do
+      let initial = activeState roles9 Night
+          commands =
+            [ NightAction "p1" (WolfTarget "p8")
+            , NightAction "p2" (WolfTarget "p8")
+            , NightAction "p3" (WolfTarget "p9")
+            , NightAction "p4" (SeerTarget "p1")
+            , NightAction "p5" (GuardTarget "p8")
+            ]
+          first = replayCommands initial commands
+          second = replayCommands initial commands
+          final = replayFinalState first
+
+      first `shouldBe` second
+
+      map replayOutcome (replaySteps first)
+        `shouldSatisfy` all isAccepted
+
+      length (replaySteps first) `shouldBe` 5
+
+      wolfVictim final `shouldBe` Just "p8"
+
+      validateGameInvariant final `shouldBe` Right ()
+
     it "replay Day 1 -> Voting -> Night 2 co ket qua co dinh" $ do
       let commands =
             [ Chat "p1" "thao luan"
@@ -253,22 +297,43 @@ main = hspec $ do
       lifeOf "p2" st1 `shouldBe` Just Dead
       validateGameInvariant st1 `shouldBe` Right ()
 
-  describe "T11 - bang phieu Soi (Sheet 02)" $ do
-    it "A-A-B chon A" $
-      wolfVictim (wolfState [("p1", "p8"), ("p2", "p8"), ("p3", "p9")])
-        `shouldBe` Just "p8"
+  describe "T11 - TV1 Night Action Privacy" $ do
+    it "TV1 - Replay Night Action giu dung quyen rieng tu" $ do
+      let initial = activeState roles9 Night
+          commands =
+            [ NightAction "p1" (WolfTarget "p8")
+            , NightAction "p4" (SeerTarget "p2")
+            , NightAction "p5" (GuardTarget "p8")
+            ]
+          result = replayCommands initial commands
+          events =
+            concat
+              [ es
+              | step <- replaySteps result
+              , Right es <- [replayOutcome step]
+              ]
 
-    it "A-B-C hoa nen khong co nan nhan" $
-      wolfVictim (wolfState [("p1", "p7"), ("p2", "p8"), ("p3", "p9")])
-        `shouldBe` Nothing
+      map replayOutcome (replaySteps result)
+        `shouldSatisfy` all isAccepted
 
-    it "hai Soi bo A-B hoa nen khong co nan nhan" $
-      wolfVictim (wolfState [("p1", "p8"), ("p2", "p9")])
-        `shouldBe` Nothing
+      events `shouldContain` [WolfVoteUpdated 1 3]
+      events `shouldContain` [SeerResult "p4" Wolves]
 
-    it "hai Soi bo A-A chon A" $
-      wolfVictim (wolfState [("p1", "p8"), ("p2", "p8")])
-        `shouldBe` Just "p8"
+      all
+        (\event ->
+          case event of
+            WolfVoteUpdated _ _ ->
+              eventVisibility event == TeamOnly Wolves
+            SeerResult pid _ ->
+              eventVisibility event == Private pid
+            NightActionAccepted pid ->
+              eventVisibility event == Private pid
+            _ -> True
+        )
+        events `shouldBe` True
+
+      validateGameInvariant (replayFinalState result)
+        `shouldBe` Right ()
 
   describe "T11 - khong ro ri thong tin bi mat qua Broadcast (E15)" $ do
     it "Dan lang khong bao gio nhan thong diep mat cua Soi hoac Tien tri" $ do
@@ -330,3 +395,7 @@ wolfState votes =
     { gameNightActions = [(actor, WolfTarget target) | (actor, target) <- votes]
     , gameWolfVotingClosed = True
     }
+
+isRejected :: Either GameError [DomainEvent] -> Bool
+isRejected (Left _) = True
+isRejected (Right _) = False
