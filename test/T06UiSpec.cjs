@@ -171,7 +171,8 @@ test('Chỉ chọn người sống khác mình; chặn gửi lặp và chờ đ�
   snapshot({hasVoted: true});
   message({type: 'ActionAccepted', roomId: 'R', requestId: command.requestId});
   assert.equal(get('vote-button').disabled, true);
-  assert.match(get('voting-status').textContent, /đã nhận phiếu/);
+  assert.equal(get('voting-status').textContent, '',
+    'Đã bỏ phiếu thì khóa nút nhưng không hiện khung xác nhận thừa');
 });
 
 test('Từ chối có thông báo và cho thử lại; sai phòng bị bỏ qua', () => {
