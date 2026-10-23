@@ -46,6 +46,7 @@ function setup(role = 'Villager', savedSession = null) {
     send(data) { this.sent.push(JSON.parse(data)); }
     close() { this.closed = true; }
   }
+  const body = new Element();
   const context = vm.createContext({WebSocket: Socket, console,
     location: {protocol: 'http:', host: 'localhost'},
     setInterval() { return 1; }, clearInterval() {}, setTimeout(callback) { timers.push(callback); return timers.length; }, clearTimeout() {},
@@ -54,7 +55,7 @@ function setup(role = 'Villager', savedSession = null) {
       setItem(key, value) { storage.set(key, value); },
       removeItem(key) { storage.delete(key); }
     },
-    document: {body: new Element(), querySelector: selector => selector.startsWith('#') ? get(selector.slice(1)) : null,
+    document: {body, querySelector: selector => selector.startsWith('#') ? get(selector.slice(1)) : null,
       getElementById: get, createElement: () => new Element(), createTextNode: value => value}
   });
   vm.runInContext(readFileSync(join(__dirname, '../web/avatar.js'), 'utf8'), context);
@@ -100,8 +101,15 @@ function setup(role = 'Villager', savedSession = null) {
   message({type: 'YourRole', roomId: 'R', role});
   message({type: 'VotingSnapshot', roomId: 'R', phase: 'Day', day: 1,
     players, hasVoted: false, canShoot: false, resolved: false, result: null});
-  return {get, message, rawMessage, get connection() { return connection; }, connections, timers, players, storage};
+  return {get, message, rawMessage, get connection() { return connection; }, connections, timers, players, storage, body};
 }
+
+test('Night không còn khung trạng thái chung và khi sang Day có mặt trời', () => {
+  const html = readFileSync(join(__dirname, '../web/index.html'), 'utf8');
+  assert.doesNotMatch(html, /id="night-status"/);
+  const {body} = setup();
+  assert.equal(body.children.some(child => child.className === 'day-transition'), true);
+});
 
 test('Trình duyệt dùng token đã lưu để reconnect đúng phòng', () => {
   const saved = {roomId: 'R', playerId: 'p1', sessionToken: 'secret-token', lastVersion: 42};
@@ -415,7 +423,6 @@ test('Reconnect giữ trạng thái hành động và thuốc riêng của Phù 
     witchHealReady: false, witchPoisonReady: true, lastProtectedId: null});
   assert.equal(get('witch-heal').disabled, true);
   assert.equal(get('witch-poison').disabled, true, 'Đã gửi action trong đêm nên mọi nút phải khóa');
-  assert.match(get('night-status').textContent, /xác nhận/);
 });
 
 test('Thợ Săn còn sống không thấy bộ chọn bắn; chỉ mở khi Server cấp quyền', () => {
@@ -425,7 +432,6 @@ test('Thợ Săn còn sống không thấy bộ chọn bắn; chỉ mở khi Ser
   assert.equal(get('hunter-action-panel').hidden, true);
   assert.equal(get('hunter-choice-panel').hidden, true);
   assert.equal(get('night-waiting-panel').hidden, false);
-  assert.match(get('night-status').textContent, /không có hành động ban đêm/);
   assert.match(get('hunter-status').textContent, /đang còn sống/);
   message({type: 'HunterShotPending', roomId: 'R'});
   assert.equal(get('hunter-action-panel').hidden, false);
@@ -474,8 +480,6 @@ test('Mã lỗi kỹ thuật từ Server được hiển thị bằng tiếng Vi
   message({type: 'CommandRejected', requestId, code: 'InvalidTarget',
     message: 'NightAction bi tu choi: InvalidTarget'});
   assert.equal(get('message').textContent,
-    'Mục tiêu không hợp lệ. Hãy chọn một người còn sống đúng luật.');
-  assert.equal(get('night-status').textContent,
     'Mục tiêu không hợp lệ. Hãy chọn một người còn sống đúng luật.');
 });
 

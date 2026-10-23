@@ -83,10 +83,16 @@ actorMatches request =
     Leave pid ->
       pid == queuedActorId request
 
+    KickPlayer actor _ ->
+      actor == queuedActorId request
+
     SetReady pid _ ->
       pid == queuedActorId request
 
     StartGame pid _ ->
+      pid == queuedActorId request
+
+    EndGame pid ->
       pid == queuedActorId request
 
     NightAction pid _ ->
@@ -270,8 +276,14 @@ dispatchPlayerCommand state command =
     Leave _ ->
       applyLobbyCommand state command
 
+    KickPlayer _ _ ->
+      applyLobbyCommand state command
+
     SetReady _ _ ->
       applyLobbyCommand state command
+
+    EndGame _ ->
+      applyCommand state command
 
     -- T06: Dùng cùng queue và validation; không mở ResolveVoting cho client.
     Vote _ _ -> applyCommand state command

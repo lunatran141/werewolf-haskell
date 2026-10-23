@@ -247,9 +247,10 @@ forOtherPlayer actor message =
 
       viewPlayerId player /= actor
 
-    MsgPlayerLeft _ pid ->
+    -- Nguoi bi Host kick cung phai nhan PlayerLeft de xoa phien va ve trang dau.
+    MsgPlayerLeft _ _ ->
 
-      pid /= actor
+      True
 
     MsgReadyChanged _ pid _ ->
 
@@ -868,6 +869,30 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
 
                   pure ()
 
+    -- Host moi thanh vien khac khoi Lobby. Actor lay tu session, khong tu JSON.
+    ClientKickPlayer requestId rid target -> do
+      current <- readIORef sessionRef
+      case current of
+        Nothing ->
+          reject outbound requestId "NOT_JOINED"
+            "Ban chua tham gia phong."
+        Just (room, _)
+          | rid /= roomId room ->
+              reject outbound requestId "WRONG_ROOM"
+                "Ban khong o trong phong nay."
+          | otherwise -> do
+              result <- submitCommand room requestId actor (KickPlayer actor target)
+              case result of
+                Left err ->
+                  sendToClient outbound
+                    (MsgRejected (Just requestId) (show err)
+                      ("KickPlayer bi tu choi: " ++ show err))
+                Right _ -> do
+                  atomically $
+                    modifyTVar' (roomReconnectTokens room)
+                      (filter ((/= target) . snd))
+                  sendToClient outbound (MsgActionAccepted requestId rid)
+
     -- Thay doi trang thai Ready.
 
     ClientSetReady requestId rid ready -> do
@@ -925,6 +950,10 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
           | otherwise ->
 
               handleStartGame room requestId actor outbound
+
+    -- Host dung van dang choi; Domain chot GameOver/Draw va reveal role.
+    ClientEndGame requestId rid ->
+      handlePlayerCommand requestId rid (EndGame actor)
 
     -- T05: Gui NightAction vao Room Command Queue.
 

@@ -2,6 +2,14 @@ let socket = null;
 let requestNumber = 0;
 let reconnectTimer = null;
 
+function restartSocketForNewSession() {
+  if (socket && typeof socket.close === "function" &&
+      (socket.readyState === WebSocket.OPEN ||
+      socket.readyState === WebSocket.CONNECTING)) {
+    socket.close();
+  }
+}
+
 function sendNightAction(choice) {
   if (
     state.phase !== "Night" ||
@@ -155,6 +163,16 @@ el.startButton.addEventListener("click", () => {
   }
 
   sendCommand("StartGame");
+});
+
+el.endGameButton.addEventListener("click", () => {
+  const isHost = state.selfPlayerId !== null &&
+    state.selfPlayerId === state.hostPlayerId;
+  const gameIsRunning = !["Lobby", "GameOver"].includes(state.phase);
+  if (!isHost || !gameIsRunning) return;
+  const accepted = typeof globalThis.confirm !== "function" ||
+    globalThis.confirm("Kết thúc ván ngay bây giờ? Kết quả sẽ được ghi là hòa.");
+  if (accepted) sendCommand("EndGame");
 });
 
 el.wolfTarget.addEventListener("change", render);

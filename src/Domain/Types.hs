@@ -171,8 +171,10 @@ data Command
   = Join PlayerId String
   | JoinWithAppearance PlayerId String Appearance
   | Leave PlayerId
+  | KickPlayer PlayerId PlayerId
   | SetReady PlayerId Bool
   | StartGame PlayerId [Role]
+  | EndGame PlayerId
   | AdvancePhase
   | NightAction PlayerId NightChoice
   | Vote PlayerId PlayerId

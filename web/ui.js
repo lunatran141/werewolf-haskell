@@ -38,11 +38,11 @@ const el = {
   readyButton: document.querySelector("#ready-button"),
   leaveButton: document.querySelector("#leave-button"),
   startButton: document.querySelector("#start-button"),
+  endGameButton: document.querySelector("#end-game-button"),
   nightSection: document.querySelector("#night-section"),
   nightPhase: document.querySelector("#night-phase"),
   nightRoleName: document.querySelector("#night-role-name"),
   nightRoleDescription: document.querySelector("#night-role-description"),
-  nightStatus: document.querySelector("#night-status"),
   wolfPanel: document.querySelector("#wolf-action-panel"),
   wolfVoteStatus: document.querySelector("#wolf-vote-status"),
   wolfTarget: document.querySelector("#wolf-target"),
@@ -274,6 +274,23 @@ function renderDashboardPlayers() {
         : "Đang chơi");
     item.append(name, avatar, footer);
 
+    const canKick = state.phase === "Lobby" &&
+      state.selfPlayerId === state.hostPlayerId && !isMe;
+    if (canKick) {
+      const kickButton = document.createElement("button");
+      kickButton.type = "button";
+      kickButton.className = "btn leave-button host-kick-button";
+      kickButton.textContent = "Mời khỏi phòng";
+      kickButton.disabled = !state.connected || state.pending !== null;
+      kickButton.addEventListener("click", event => {
+        event.stopPropagation();
+        const accepted = typeof globalThis.confirm !== "function" ||
+          globalThis.confirm(`Mời ${player.displayName || player.playerId} khỏi phòng?`);
+        if (accepted) sendCommand("KickPlayer", {targetId: player.playerId});
+      });
+      item.appendChild(kickButton);
+    }
+
     item.classList.toggle("is-targetable", targetable);
     item.classList.toggle("is-selected-target", selected);
     item.classList.toggle("is-unavailable-target", Boolean(unavailableReason));
@@ -465,7 +482,7 @@ function renderVoting() {
     : voting.phase !== "Voting" ? "Chưa đến thời gian bỏ phiếu."
     : !me?.alive ? "Bạn đã bị loại và chỉ có thể theo dõi."
     : voting.deadlineMs !== null && Date.now() >= voting.deadlineMs ? "Đã hết 60 giây. Chờ Server chốt phiếu."
-    : voting.hasVoted ? "Server đã nhận phiếu của bạn. Không thể đổi lựa chọn trong vòng này."
+    : voting.hasVoted ? ""
     : "Hãy chọn người bị nghi ngờ. Hòa cao nhất hoặc không có phiếu sẽ không loại ai.";
   voteEl["voting-status"].textContent = status;
   voteEl["vote-result"].textContent = voting.summary;
@@ -621,6 +638,13 @@ function renderLobby() {
   el.startButton.hidden = !isHost || !inLobby;
   el.startButton.disabled = !canStartGame();
 
+  const gameIsRunning = inRoom && !["Lobby", "GameOver"].includes(state.phase);
+  el.endGameButton.hidden = !isHost || !gameIsRunning;
+  el.endGameButton.disabled = !state.connected || busy;
+  el.endGameButton.textContent = state.pending?.type === "EndGame"
+    ? "Đang kết thúc ván..."
+    : "Kết thúc ván";
+
   el.startButton.textContent =
     state.pending?.type === "StartGame"
       ? "Đang bắt đầu ván..."
@@ -734,25 +758,6 @@ function renderNight() {
     !witchCanChoose || !state.witchPoisonReady || !el.witchTarget.value;
 
   el.witchPass.disabled = !witchCanChoose;
-
-  if (state.nightMessage) {
-    el.nightStatus.textContent = state.nightMessage;
-  } else if (state.nightActionDone) {
-    el.nightStatus.textContent =
-      "Hành động đã được Server xác nhận.";
-  } else if (!role) {
-    el.nightStatus.textContent =
-      "Đang chờ thông tin vai trò từ Server.";
-  } else if (role === "Witch" && !state.witchVictimResolved) {
-    el.nightStatus.textContent =
-      "Đang chờ tất cả Sói chốt mục tiêu trước khi Phù Thủy hành động.";
-  } else if (role === "Hunter") {
-    el.nightStatus.textContent =
-      "Bạn không có hành động ban đêm. Quyền bắn chỉ mở sau khi bạn bị loại và Server xác nhận.";
-  } else {
-    el.nightStatus.textContent =
-      "Hãy chọn hành động phù hợp với vai trò.";
-  }
 
   el.seerResultPanel.hidden = state.seerResult === null;
 

@@ -65,7 +65,7 @@ function handleNightAccepted() {
   }
 
   state.nightActionDone = true;
-  state.nightMessage = "Server đã chấp nhận hành động.";
+  state.nightMessage = "";
 }
 
 
@@ -83,9 +83,9 @@ function handlePhaseChanged(phase) {
   }
   state.phase = phase;
   voting.phase = phase;
-  if (previousPhase === "Night" && phase === "Day") {
-  showDayTransition();
-}
+  if (phase === "Day" && previousPhase !== "Day") {
+    showDayTransition();
+  }
 
   if (phase === "Day" && previousPhase !== "Day") {
     state.chatDay = null;
@@ -260,9 +260,7 @@ function handleServerMessage(message) {
       if (message.roomId === state.roomId) {
         if (state.phase === "Night") {
           state.nightActionDone = message.nightActionSubmitted === true;
-          if (state.nightActionDone) {
-            state.nightMessage = "Hành động đã được Server xác nhận.";
-          }
+          if (state.nightActionDone) state.nightMessage = "";
         }
         if (typeof message.witchHealReady === "boolean") {
           state.witchHealReady = message.witchHealReady;
@@ -336,6 +334,7 @@ function handleServerMessage(message) {
       if (message.playerId === state.selfPlayerId) {
         clearSavedSession();
         resetRoomState();
+        restartSocketForNewSession();
       }
       break;
 
@@ -367,8 +366,7 @@ function handleServerMessage(message) {
         if (message.role !== "Werewolf") state.wolfTeammateIds = [];
         state.selfAbility = message.ability && typeof message.ability.description === "string"
           ? message.ability : null;
-        state.nightMessage =
-          "Bạn đã nhận vai trò từ Server.";
+        state.nightMessage = "";
       }
       break;
 

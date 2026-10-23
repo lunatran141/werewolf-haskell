@@ -48,8 +48,10 @@ data ClientMessage
   | ClientJoin RequestId RoomId String
   | ClientJoinWithAppearance RequestId RoomId String Appearance
   | ClientLeave RequestId RoomId
+  | ClientKickPlayer RequestId RoomId String
   | ClientSetReady RequestId RoomId Bool
   | ClientStartGame RequestId RoomId
+  | ClientEndGame RequestId RoomId
   | ClientNightAction RequestId RoomId NightChoice
   -- T06: Browser chi gui targetId; PlayerId voter lay tu session Server.
   | ClientVote RequestId RoomId String
@@ -319,12 +321,18 @@ instance FromJSON ClientMessage where
       "LeaveGame" ->
         pure (ClientLeave requestId roomId)
 
+      "KickPlayer" ->
+        ClientKickPlayer requestId roomId <$> obj .: "targetId"
+
       "SetReady" ->
         ClientSetReady requestId roomId
           <$> obj .: "ready"
 
       "StartGame" ->
         pure (ClientStartGame requestId roomId)
+
+      "EndGame" ->
+        pure (ClientEndGame requestId roomId)
 
       "NightAction" -> do
         choiceValue <- obj .: "choice"
@@ -407,6 +415,14 @@ instance ToJSON ClientMessage where
           , "roomId" .= roomId
           ]
 
+      ClientKickPlayer requestId roomId targetId ->
+        object
+          [ "type" .= ("KickPlayer" :: String)
+          , "requestId" .= requestId
+          , "roomId" .= roomId
+          , "targetId" .= targetId
+          ]
+
       ClientSetReady requestId roomId ready ->
         object
           [ "type" .= ("SetReady" :: String)
@@ -418,6 +434,13 @@ instance ToJSON ClientMessage where
       ClientStartGame requestId roomId ->
         object
           [ "type" .= ("StartGame" :: String)
+          , "requestId" .= requestId
+          , "roomId" .= roomId
+          ]
+
+      ClientEndGame requestId roomId ->
+        object
+          [ "type" .= ("EndGame" :: String)
           , "requestId" .= requestId
           , "roomId" .= roomId
           ]

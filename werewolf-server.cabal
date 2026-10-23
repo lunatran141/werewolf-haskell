@@ -5,7 +5,8 @@ build-type: Simple
 
 library
   exposed-modules:
-      Domain.Engine
+      Analytics.Store
+    , Domain.Engine
     , Domain.Rules
     , Domain.Replay
     , Domain.Simulation
@@ -14,8 +15,10 @@ library
     , Domain.Night
     , Domain.RoleShuffle
     , Protocol.Json
+    , Protocol.Analytics
     , Protocol.Types
     , Server.Broadcast
+    , Server.AnalyticsClient
     , Server.Connection
     , Server.GameLoop
     , Server.Room
@@ -28,6 +31,9 @@ library
       base >=4.17 && <5
       , aeson >=2 && <3
       , bytestring >=0.11
+      , directory >=1.3
+      , filepath >=1.4
+      , network >=3.1 && <4
       , stm >=2.5 && <3
       , websockets >=0.12 && <0.14
       , random >=1.2 && <2
@@ -48,6 +54,67 @@ executable werewolf-server
     , wai-websockets >=3.0 && <4
     , websockets >=0.12 && <0.14
     , wai-app-static >=3.1 && <3.3
+
+executable analytics-worker
+  main-is: AnalyticsWorker.hs
+  hs-source-dirs: app
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat -O2 -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.17 && <5
+    , bytestring >=0.11
+    , network >=3.1 && <4
+    , werewolf-server
+
+test-suite x02-analytics-protocol-test
+  type: exitcode-stdio-1.0
+  main-is: X02AnalyticsProtocolSpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , aeson >=2 && <3
+    , bytestring >=0.11
+    , hspec >=2.10
+    , werewolf-server
+
+test-suite x02-analytics-worker-test
+  type: exitcode-stdio-1.0
+  main-is: X02AnalyticsWorkerSpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , bytestring >=0.11
+    , directory >=1.3
+    , hspec >=2.10
+    , werewolf-server
+
+test-suite x02-analytics-client-test
+  type: exitcode-stdio-1.0
+  main-is: X02AnalyticsClientSpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , hspec >=2.10
+    , werewolf-server
+
+test-suite host-controls-test
+  type: exitcode-stdio-1.0
+  main-is: HostControlsSpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , aeson >=2 && <3
+    , hspec >=2.10
+    , werewolf-server
+
 test-suite skeleton-test
   type: exitcode-stdio-1.0
   main-is: SkeletonSpec.hs

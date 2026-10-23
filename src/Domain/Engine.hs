@@ -102,6 +102,20 @@ leavePlayer state pid = do
         [HostChanged newHost | hostLeft && not (null remaining)]
   validateGameInvariant newState
   pure (newState, events)
+
+-- Host chi duoc moi mot thanh vien khac khoi phong khi con o Lobby.
+kickPlayer
+  :: GameState
+  -> PlayerId
+  -> PlayerId
+  -> Either GameError (GameState, [DomainEvent])
+kickPlayer state actor target = do
+  if gamePhase state == Lobby then Right () else Left WrongPhase
+  if actor == gameHost state && actor /= target
+    then Right ()
+    else Left NotAuthorized
+  _ <- validatePlayerExists target (gamePlayers state)
+  leavePlayer state target
 -- Doi trang thai Ready cua mot nguoi choi.
 -- Neu gia tri khong doi thi khong phat ReadyChanged.
 setPlayerReady
@@ -138,6 +152,7 @@ applyLobbyCommand state command =
     JoinWithAppearance pid name appearance ->
       joinPlayerWithAppearance state pid name appearance
     Leave pid -> leavePlayer state pid
+    KickPlayer actor target -> kickPlayer state actor target
     SetReady pid ready -> setPlayerReady state pid ready
     _ -> Left InvalidCommand
 
@@ -204,6 +219,47 @@ startGame state actor shuffledRoles = do
         [GameStarted, PhaseChanged Night] ++ roleEvents
   validateGameInvariant newState
   pure (newState, events)
+
+-- Host co the dung van dang choi. Ket qua chu dong dung duoc ghi la hoa,
+-- sau do cong khai vai giong nhu mot GameOver binh thuong.
+endGame
+  :: GameState
+  -> PlayerId
+  -> Either GameError (GameState, [DomainEvent])
+endGame state actor = do
+  if actor == gameHost state && not (null actor)
+    then Right ()
+    else Left NotAuthorized
+  if gamePhase state == Lobby
+    then Left WrongPhase
+    else if gamePhase state == GameOver
+      then Left GameAlreadyOver
+      else Right ()
+  let newState = state
+        { gamePhase = GameOver
+        , gameVotes = []
+        , gameDiscussionSkips = []
+        , gameNightActions = []
+        , gamePendingReveals = []
+        , gamePendingHunter = Nothing
+        , gameWolfVotingClosed = False
+        , gameNightResolved = False
+        , gameVotingResolved = False
+        , gameResult = Just Draw
+        }
+      roles =
+        [ (playerId player, role)
+        | player <- gamePlayers newState
+        , Just role <- [playerRole player]
+        ]
+  validateGameInvariant newState
+  pure
+    ( newState
+    , [ PhaseChanged GameOver
+      , GameFinished Draw
+      , GameRolesRevealed roles
+      ]
+    )
 -- AdvancePhase chi dung de ket thuc thoi gian thao luan Day.
 -- Night va Voting phai duoc resolve truoc khi chuyen pha.
 advancePhase
@@ -507,8 +563,10 @@ applyCommand state command
         Join _ _ -> applyLobbyCommand state command
         JoinWithAppearance _ _ _ -> applyLobbyCommand state command
         Leave _ -> applyLobbyCommand state command
+        KickPlayer _ _ -> applyLobbyCommand state command
         SetReady _ _ -> applyLobbyCommand state command
         StartGame _ _ -> applyPhaseCommand state command
+        EndGame actor -> endGame state actor
         AdvancePhase -> applyPhaseCommand state command
         NightAction _ _ -> applyNightCommand state command
         Vote actor target -> castVote state actor target

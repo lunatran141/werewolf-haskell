@@ -24,7 +24,9 @@ import Domain.Types
 import Protocol.Types (RequestId, RoomId)
 import Control.Concurrent.MVar (MVar, newMVar, withMVar)
 import Data.Word (Word64)
+import Numeric (showHex)
 import Numeric.Natural (Natural)
+import System.Random (randomIO)
 
 -- | Sức chứa mặc định của hàng đợi lệnh cho mỗi phòng.
 defaultCommandQueueCapacity :: Natural
@@ -49,6 +51,8 @@ data RoomUpdate = RoomUpdate
 
 data RoomRuntime = RoomRuntime
   { roomId       :: RoomId
+  -- ID rieng cho moi lan tao phong, tranh trung matchId khi tai su dung roomId.
+  , roomInstanceId :: String
   , roomState    :: TVar GameState
   , roomVersion  :: TVar Int
   , roomCommands :: TBQueue QueuedCommand
@@ -71,6 +75,7 @@ newRoomRuntime = newRoomRuntimeWithCapacity defaultCommandQueueCapacity
 
 newRoomRuntimeWithCapacity :: Natural -> RoomId -> IO RoomRuntime
 newRoomRuntimeWithCapacity capacity rid = do
+  instanceNumber <- randomIO :: IO Word64
   stateVar <- newTVarIO emptyLobby
   versionVar <- newTVarIO 0
   commandQueue <- newTBQueueIO (max 1 capacity)
@@ -83,6 +88,7 @@ newRoomRuntimeWithCapacity capacity rid = do
   phaseDeadline <- newTVarIO Nothing
   pure RoomRuntime
     { roomId = rid
+    , roomInstanceId = showHex instanceNumber ""
     , roomState = stateVar
     , roomVersion = versionVar
     , roomCommands = commandQueue

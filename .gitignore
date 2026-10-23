@@ -5,4 +5,5 @@ dist-newstyle/
 *.hi
 *.o
 *.exe
+analytics/*.jsonl
 
