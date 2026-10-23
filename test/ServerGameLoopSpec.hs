@@ -22,12 +22,14 @@ import Control.Concurrent.STM
   )
 import Control.Exception (SomeException, bracket, try)
 import Control.Monad (forM, forM_)
+import Data.Either (isRight)
 import Data.Unique (hashUnique, newUnique)
 import Domain.Engine
   ( closeWolfVoting
   , completeNightTurn
   , resolveNightTurn
   )
+import Domain.Night (wolfVictim)
 import Domain.Types
   ( ChatChannel(..)
   , ChatRecord(..)
@@ -45,6 +47,7 @@ import Domain.Types
   , Team(..)
   , defaultAppearance
   , emptyLobby
+  , gameDay
   , gameHost
   , gamePhase
   , gamePlayers
@@ -221,6 +224,7 @@ main = hspec $ do
   e14BackpressureSpec
   e17SupervisionSpec
   chatAndPrivacyFilterSpec
+  t11CrossTestingSpec
 
 lobbySpec :: Spec
 lobbySpec = describe "T08 Lobby GameLoop" $ do
@@ -954,3 +958,130 @@ chatAndPrivacyFilterSpec = describe "T08 - Chat & Privacy Filter" $ do
         [ MsgGameRolesRevealed "ROOM-9P" rolePairs
         , MsgGameFinished "ROOM-9P" (Winner Village)
         ]
+
+-- =============================================================================
+-- T11 - Cross-Testing & Multi-Day STM GameLoop (Sheet 01, 02, 05)
+-- =============================================================================
+t11CrossTestingSpec :: Spec
+t11CrossTestingSpec = describe "T11 - Kiem thu cheo STM GameLoop & Wolf Tally" $ do
+
+  it "Day 1 -> Night 2 -> Day 2: Day 2 van giu chat Day 1 va loc WolvesNight dung quyen cho Dan / Soi chet" $ do
+    (room, _) <- setupStartedNinePlayerRoom
+    stDay1 <- transitionNightToDay room
+    gamePhase stDay1 `shouldBe` Day
+    gameDay stDay1 `shouldBe` 1
+
+    resChatDay1 <- submit room "p8" (ChatInChannel "p8" PublicDay "Thao luan ngay 1 tu p8")
+    resChatDay1 `shouldSatisfy` isRight
+
+    _ <- atomically (applyInternalCommand room AdvancePhase)
+    stVoting1 <- readTVarIO (roomState room)
+    gamePhase stVoting1 `shouldBe` Voting
+
+    _ <- atomically (applyInternalCommand room ResolveVoting)
+    stNight2 <- readTVarIO (roomState room)
+    gamePhase stNight2 `shouldBe` Night
+    gameDay stNight2 `shouldBe` 2
+
+    resChatNight2 <- submit room "p1" (ChatInChannel "p1" WolvesNight "Soi thao luan dem 2")
+    resChatNight2 `shouldSatisfy` isRight
+
+    stDay2 <- transitionNightToDay room
+    gamePhase stDay2 `shouldBe` Day
+    gameDay stDay2 `shouldBe` 2
+
+    resChatDay2 <- submit room "p8" (ChatInChannel "p8" PublicDay "Thao luan ngay 2 tu p8")
+    resChatDay2 `shouldSatisfy` isRight
+
+    fullHistory <- readTVarIO (roomChatHistory room)
+    length fullHistory `shouldBe` 4
+    map chatChannel fullHistory
+      `shouldBe`
+        [ PublicDay
+        , PublicDay
+        , WolvesNight
+        , PublicDay
+        ]
+
+    let wolf1View = chatHistorySnapshot "ROOM-9P" "p1" stDay2 fullHistory
+    wolf1View `shouldBe` MsgChatHistorySnapshot "ROOM-9P" fullHistory
+
+    let villagerView = chatHistorySnapshot "ROOM-9P" "p8" stDay2 fullHistory
+        expectedVillagerMsgs = filter (\c -> chatChannel c == PublicDay) fullHistory
+    length expectedVillagerMsgs `shouldBe` 3
+    villagerView `shouldBe` MsgChatHistorySnapshot "ROOM-9P" expectedVillagerMsgs
+
+    let deadWolfState =
+          stDay2
+            { gamePlayers =
+                [ if playerId p == "p2"
+                    then p { playerLifeStatus = Dead }
+                    else p
+                | p <- gamePlayers stDay2
+                ]
+            }
+        deadWolfView = chatHistorySnapshot "ROOM-9P" "p2" deadWolfState fullHistory
+    deadWolfView `shouldBe` MsgChatHistorySnapshot "ROOM-9P" expectedVillagerMsgs
+
+  it "STM GameLoop tally phieu Soi 3 Soi (A-A-B ra A, A-B-C hoa) va 2 Soi (A-B hoa, A-A ra A)" $ do
+    (roomA, _) <- setupStartedNinePlayerRoom
+    resA1 <- submit roomA "p1" (NightAction "p1" (WolfTarget "p8"))
+    resA2 <- submit roomA "p2" (NightAction "p2" (WolfTarget "p8"))
+    resA3 <- submit roomA "p3" (NightAction "p3" (WolfTarget "p9"))
+    resA1 `shouldSatisfy` isRight
+    resA2 `shouldSatisfy` isRight
+    resA3 `shouldSatisfy` isRight
+    stA <- readTVarIO (roomState roomA)
+    gameWolfVotingClosed stA `shouldBe` True
+    wolfVictim stA `shouldBe` Just "p8"
+
+    (roomB, _) <- setupStartedNinePlayerRoom
+    resB1 <- submit roomB "p1" (NightAction "p1" (WolfTarget "p7"))
+    resB2 <- submit roomB "p2" (NightAction "p2" (WolfTarget "p8"))
+    resB3 <- submit roomB "p3" (NightAction "p3" (WolfTarget "p9"))
+    resB1 `shouldSatisfy` isRight
+    resB2 `shouldSatisfy` isRight
+    resB3 `shouldSatisfy` isRight
+    stB <- readTVarIO (roomState roomB)
+    gameWolfVotingClosed stB `shouldBe` True
+    wolfVictim stB `shouldBe` Nothing
+
+    (roomC, _) <- setupStartedNinePlayerRoom
+    stInitC <- readTVarIO (roomState roomC)
+    let stTwoWolvesC =
+          stInitC
+            { gamePlayers =
+                [ if playerId p == "p3"
+                    then p { playerLifeStatus = Dead }
+                    else p
+                | p <- gamePlayers stInitC
+                ]
+            }
+    atomically (writeTVar (roomState roomC) stTwoWolvesC)
+    resC1 <- submit roomC "p1" (NightAction "p1" (WolfTarget "p8"))
+    resC2 <- submit roomC "p2" (NightAction "p2" (WolfTarget "p9"))
+    resC1 `shouldSatisfy` isRight
+    resC2 `shouldSatisfy` isRight
+    stC <- readTVarIO (roomState roomC)
+    gameWolfVotingClosed stC `shouldBe` True
+    wolfVictim stC `shouldBe` Nothing
+
+    (roomD, _) <- setupStartedNinePlayerRoom
+    stInitD <- readTVarIO (roomState roomD)
+    let stTwoWolvesD =
+          stInitD
+            { gamePlayers =
+                [ if playerId p == "p3"
+                    then p { playerLifeStatus = Dead }
+                    else p
+                | p <- gamePlayers stInitD
+                ]
+            }
+    atomically (writeTVar (roomState roomD) stTwoWolvesD)
+    resD1 <- submit roomD "p1" (NightAction "p1" (WolfTarget "p8"))
+    resD2 <- submit roomD "p2" (NightAction "p2" (WolfTarget "p8"))
+    resD1 `shouldSatisfy` isRight
+    resD2 `shouldSatisfy` isRight
+    stD <- readTVarIO (roomState roomD)
+    gameWolfVotingClosed stD `shouldBe` True
+    wolfVictim stD `shouldBe` Just "p8"

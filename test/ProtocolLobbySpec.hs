@@ -513,3 +513,63 @@ main = hspec $ do
           ]
       nightMessagesFor "ROOM-01" "p8" events
         `shouldBe` [MsgPhaseChanged "ROOM-01" Night]
+
+  describe "T11 - Cross-Review Protocol JSON & Sync Messages" $ do
+
+    it "MsgRoomVersion round-trip JSON va format dung schema" $ do
+      let msg = MsgRoomVersion "ROOM-01" 42
+          encoded = encodeServerMessage msg
+          expected =
+            object
+              [ "type" .= ("RoomVersion" :: String)
+              , "roomId" .= ("ROOM-01" :: String)
+              , "version" .= (42 :: Int)
+              ]
+      eitherDecode encoded `shouldBe` Right expected
+      (eitherDecode encoded :: Either String ServerMessage) `shouldBe` Right msg
+
+    it "MsgDiscussionSkipState round-trip JSON va format dung schema" $ do
+      let msg = MsgDiscussionSkipState "ROOM-01" 5 8 True
+          encoded = encodeServerMessage msg
+          expected =
+            object
+              [ "type" .= ("DiscussionSkipState" :: String)
+              , "roomId" .= ("ROOM-01" :: String)
+              , "submitted" .= (5 :: Int)
+              , "total" .= (8 :: Int)
+              , "hasSkipped" .= True
+              ]
+      eitherDecode encoded `shouldBe` Right expected
+      (eitherDecode encoded :: Either String ServerMessage) `shouldBe` Right msg
+
+    it "MsgValidTargetsSnapshot round-trip JSON va format dung schema" $ do
+      let targets = [("WolfTarget", ["p2", "p3"]), ("SeerTarget", ["p1"])]
+          msg = MsgValidTargetsSnapshot "ROOM-01" Night 1 3 targets
+          encoded = encodeServerMessage msg
+      (eitherDecode encoded :: Either String ServerMessage) `shouldBe` Right msg
+
+    it "MsgPrivateActionState round-trip JSON va format dung schema" $ do
+      let msg = MsgPrivateActionState "ROOM-01" True (Just True) (Just False) (Just "p4")
+          encoded = encodeServerMessage msg
+          expected =
+            object
+              [ "type" .= ("PrivateActionState" :: String)
+              , "roomId" .= ("ROOM-01" :: String)
+              , "nightActionSubmitted" .= True
+              , "witchHealReady" .= True
+              , "witchPoisonReady" .= False
+              , "lastProtectedId" .= ("p4" :: String)
+              ]
+      eitherDecode encoded `shouldBe` Right expected
+      (eitherDecode encoded :: Either String ServerMessage) `shouldBe` Right msg
+
+    it "ClientSkipDiscussion round-trip JSON" $ do
+      let clientMsg = ClientSkipDiscussion "req-skip-1" "ROOM-01"
+          jsonVal =
+            object
+              [ "type" .= ("SkipDiscussion" :: String)
+              , "requestId" .= ("req-skip-1" :: String)
+              , "roomId" .= ("ROOM-01" :: String)
+              ]
+      eitherDecode (encode clientMsg) `shouldBe` Right jsonVal
+      decodeClientMessage (encode clientMsg) `shouldBe` Right clientMsg
