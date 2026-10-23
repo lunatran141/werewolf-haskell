@@ -1,9 +1,7 @@
-{-# LANGUAGE ScopedTypeVariables #-}
-
 module Main (main) where
 
 import Control.Concurrent (forkFinally)
-import Control.Exception (SomeException, bracket, displayException)
+import Control.Exception (bracket, displayException)
 import Control.Monad (forever, void)
 import qualified Data.ByteString as BS
 import Network.Socket
