@@ -1,0 +1,5 @@
+preset,players,wolves,games,base_seed,cores,seq_ms,par_ms,speedup,village_wins,wolf_wins,draws,village_win_rate_pct,wolf_win_rate_pct,draw_rate_pct,avg_rounds,seq_eq_par
+8p (2 Soi),8,2,1000,2026,16,801.26,163.86,4.89x,267,733,0,26.70%,73.30%,0.00%,3.52,TRUE
+9p (3 Soi),9,3,1000,2026,16,957.92,183.05,5.23x,96,904,0,9.60%,90.40%,0.00%,3.42,TRUE
+8p (2 Soi),8,2,5000,2026,16,3923.03,782.52,5.01x,1307,3685,8,26.14%,73.70%,0.16%,3.52,TRUE
+9p (3 Soi),9,3,5000,2026,16,5208.43,917.46,5.68x,480,4518,2,9.60%,90.36%,0.04%,3.41,TRUE
