@@ -1,4 +1,12 @@
-const WS_URL = `${location.protocol === "https:" ? "wss:" : "ws:"}//${location.host}/ws`;
+const isSeparateLocalWebServer =
+  ["localhost", "127.0.0.1"].includes(location.hostname) &&
+  location.port !== "8080";
+const wsProtocol =
+  location.protocol === "https:" && !isSeparateLocalWebServer ? "wss:" : "ws:";
+const wsHost = isSeparateLocalWebServer
+  ? `${location.hostname}:8080`
+  : location.host;
+const WS_URL = `${wsProtocol}//${wsHost}/ws`;
 const SESSION_STORAGE_KEY = "werewolf-session";
 
 const serverErrorMessages = {

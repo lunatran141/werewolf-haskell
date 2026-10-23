@@ -556,8 +556,23 @@ castVote state actor target = do
   if null (gamePendingReveals state) then Right () else Left InvalidGameState
   let newState = state
         { gameVotes = gameVotes state ++ [(actor, target)] }
+      aliveVoterIds =
+        [ playerId player
+        | player <- gamePlayers newState
+        , playerLifeStatus player == Alive
+        ]
+      allAlivePlayersVoted =
+        all (`elem` map fst (gameVotes newState)) aliveVoterIds
   validateGameInvariant newState
-  pure (newState, [VoteUpdated actor target])
+  if allAlivePlayersVoted
+    then do
+      (resolvedState, resolvedEvents) <- resolveVoting newState
+      pure
+        ( resolvedState
+        , VoteUpdated actor target : resolvedEvents
+        )
+    else
+      pure (newState, [VoteUpdated actor target])
 
 -- T06: Kiểm tra cửa sổ Voting trước khi tally. Vote đã chốt hoặc Hunter
 -- đang chờ bắn thì không được nhận thêm phiếu.

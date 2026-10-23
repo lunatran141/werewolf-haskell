@@ -448,6 +448,22 @@ test('Thông báo hệ thống về kết quả phiếu được giữ trong l�
   assert.match(systemLine.textContent, /Kết quả bỏ phiếu vòng 1/);
 });
 
+test('Kết quả phiếu tự mở Chat chung dù Sói đang xem kênh riêng', () => {
+  const {get, message, players} = setup('Werewolf');
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 1,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  get('chat-wolves-tab').fire('click');
+  assert.match(get('chat-heading').textContent, /Chat Sói/);
+
+  message({type: 'ChatMessage', roomId: 'R', day: 1, channel: 'PublicDay',
+    messageId: 'system-auto-open', sequence: 2, senderId: '__system__',
+    text: 'Kết quả bỏ phiếu vòng 1: Hai đã chết.'});
+
+  assert.equal(get('chat-public-tab').attributes['aria-pressed'], 'true');
+  assert.match(get('chat-heading').textContent, /Chat chung · Ngày 1/);
+  assert.match(get('chat-messages').children[1].textContent, /Kết quả bỏ phiếu vòng 1/);
+});
+
 test('Mã lỗi kỹ thuật từ Server được hiển thị bằng tiếng Việt có dấu', () => {
   const {get, message, connection, players} = setup('Werewolf');
   message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 1,

@@ -157,8 +157,10 @@ function receiveChat(chat, showBubble = true) {
   });
 
   // Khi Server vừa chốt Voting, giữ khung chat ở ngày vừa kết thúc để người
-  // chơi nhìn thấy ngay kết quả trong lúc chuyển sang Night kế tiếp.
+  // chơi nhìn thấy ngay kết quả trong lúc chuyển sang Night kế tiếp. Nếu Sói
+  // đang xem kênh riêng, tự chuyển về Chat chung thay vì bắt họ bấm tab.
   if (showBubble && playerId === "__system__" && channel === "PublicDay") {
+    state.chatChannel = "PublicDay";
     state.chatDay = day;
   }
 
@@ -206,6 +208,12 @@ function handleServerMessage(message) {
         hasVoted: message.hasVoted, canShoot: message.canShoot,
         resolved: message.resolved, result: message.result
       });
+      // Day mới luôn mở Chat chung của đúng ngày ngay khi nhận snapshot,
+      // không cần người chơi bấm tab Chat để làm UI cập nhật.
+      if (message.phase === "Day") {
+        state.chatChannel = "PublicDay";
+        state.chatDay = message.day;
+      }
       if (message.phase === "Voting" && !message.resolved) startVoteClock(message.day);
       if (message.phase === "Day") startDayClock(message.day);
       state.hunterPending = message.canShoot;
