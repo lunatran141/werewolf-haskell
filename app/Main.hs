@@ -11,6 +11,12 @@ import Network.Wai.Application.Static
   (defaultFileServerSettings, staticApp)
 import qualified Network.WebSockets as WS
 import Server.GameLoop (runLobbyLoop)
+import Server.AnalyticsClient
+  ( AnalyticsPublisher
+  , newAnalyticsPublisherFromEnv
+  , runAnalyticsPublisher
+  , subscribeRoomAnalytics
+  )
 import Server.Room (RoomRegistry, RoomRuntime(..), newRoomRegistry)
 import Server.Supervisor (Supervisor, forkSupervised, newSupervisor)
 import Server.WebSocket (webSocketApp)
@@ -23,12 +29,18 @@ main = do
   port <- maybe 8080 id . (>>= readMaybe) <$> lookupEnv "APP_PORT"
   registry <- newRoomRegistry
   supervisor <- newSupervisor
+  analyticsPublisher <- newAnalyticsPublisherFromEnv
+  _ <- forkSupervised supervisor "analytics-publisher" $
+    runAnalyticsPublisher analyticsPublisher
 
   putStrLn ("werewolf-server listening on port " <> show port)
-  run port (app registry (startRoomWorker supervisor))
+  run port (app registry (startRoomWorker supervisor analyticsPublisher))
 
-startRoomWorker :: Supervisor -> RoomRuntime -> IO ()
-startRoomWorker supervisor room = do
+startRoomWorker :: Supervisor -> AnalyticsPublisher -> RoomRuntime -> IO ()
+startRoomWorker supervisor analyticsPublisher room = do
+  analyticsForwarder <- subscribeRoomAnalytics analyticsPublisher room
+  _ <- forkSupervised supervisor ("analytics-room-" ++ roomId room)
+    analyticsForwarder
   _ <- forkSupervised supervisor ("game-loop-" ++ roomId room) $
     runLobbyLoop room `catch` \(err :: SomeException) ->
       hPutStrLn stderr

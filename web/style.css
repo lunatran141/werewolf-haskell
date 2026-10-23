@@ -700,6 +700,13 @@ body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
 }
 .entrance-mode-button.is-active { color: #fff; background: #0284c7; box-shadow: 0 4px 14px rgba(2, 132, 199, 0.4); }
 #host-mode-button.is-active { color: #111827; background: linear-gradient(135deg, #f59e0b, #ea580c); box-shadow: 0 4px 14px rgba(245, 158, 11, 0.4); }
+
+.host-kick-button {
+  width: calc(100% - 1.5rem);
+  margin: 0.35rem 0.75rem 0.75rem;
+  padding: 0.45rem 0.7rem;
+  font-size: 0.8rem;
+}
 .appearance-picker { border: 1px solid #1e293b; border-radius: 20px; padding: 18px; background: #090e1a; }
 .appearance-picker legend { float: none; width: auto; padding: 0 6px; font-size: 13px; font-weight: 800; color: #9dcced; }
 .appearance-preview {
@@ -906,16 +913,6 @@ body.in-room #lobby-section { padding: clamp(18px, 2vw, 30px); }
 
 .night-role-panel .card-description {
   margin: 0;
-}
-
-.night-card #night-status {
-  margin: 0;
-  padding: 12px 15px;
-  border: 1px solid rgba(205, 185, 255, 0.24);
-  border-radius: 10px;
-  color: #e4ddf5;
-  background: rgba(255, 255, 255, 0.05);
-  line-height: 1.6;
 }
 
 .night-action-panel {
@@ -1186,7 +1183,7 @@ body[data-phase="Voting"] .twinkling-stars {
   display: grid;
   place-items: center;
   pointer-events: none;
-  background: rgba(255, 239, 179, 0.12);
+  background: radial-gradient(circle, rgba(255, 239, 179, 0.26), rgba(255, 239, 179, 0.06) 42%, transparent 72%);
   animation: day-overlay 1.6s ease-out forwards;
 }
 
@@ -1211,6 +1208,11 @@ body[data-phase="Voting"] .twinkling-stars {
 
 @media (prefers-reduced-motion: reduce) {
   .day-transition {
-    display: none;
+    animation: none;
+  }
+
+  .day-transition-sun {
+    opacity: 1;
+    animation: none;
   }
 }
