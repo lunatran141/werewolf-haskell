@@ -1,21 +1,27 @@
 -- | Cac kieu du lieu mien cua tro choi duoc chot trong T02.
 module Domain.Types where
 
+import Control.DeepSeq (NFData)
+import GHC.Generics (Generic)
+
 type PlayerId = String
 
 -- Moi Role thuoc dung mot Team; phe duoc suy ra tu Role.
 data Role = Werewolf | Seer | Guard | Witch | Hunter | Villager
-  deriving (Eq, Ord, Show, Read, Enum, Bounded)
+  deriving (Eq, Ord, Show, Read, Enum, Bounded, Generic)
+instance NFData Role
 
 data Team = Wolves | Village
-  deriving (Eq, Ord, Show, Read)
+  deriving (Eq, Ord, Show, Read, Generic)
+instance NFData Team
 
 teamOfRole :: Role -> Team
 teamOfRole Werewolf = Wolves
 teamOfRole _        = Village
 
 data Phase = Lobby | Night | Day | Voting | GameOver
-  deriving (Eq, Ord, Show, Read, Enum, Bounded)
+  deriving (Eq, Ord, Show, Read, Enum, Bounded, Generic)
+instance NFData Phase
 
 -- T02: Thong tin huong dan kha nang cho tung Role.
 -- Day la mo ta chung theo loai vai, khong chua PlayerId.
@@ -74,7 +80,8 @@ roleAbilityInfo role =
         "Khi bỏ phiếu, chọn một người còn sống khác bản thân."
 
 data LifeStatus = Alive | Dead
-  deriving (Eq, Show, Read)
+  deriving (Eq, Show, Read, Generic)
+instance NFData LifeStatus
 
 -- Ket noi thuc te do Server quan ly; Domain khong chua socket.
 data ConnectionStatus = Connected | Disconnected
@@ -138,7 +145,8 @@ data LobbyMember = LobbyMember
 
 -- Draw khac voi Nothing (game chua ket thuc).
 data GameResult = Winner Team | Draw
-  deriving (Eq, Show, Read)
+  deriving (Eq, Show, Read, Generic)
+instance NFData GameResult
 
 -- LowestPlayerId la bien the cu; Validation phai tu choi.
 data TiePolicy = NoElimination | LowestPlayerId
