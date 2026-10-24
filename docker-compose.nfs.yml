@@ -1,0 +1,43 @@
+services:
+  nfs-init:
+    image: alpine:3.22
+    command: ["sh", "-c", "mkdir -p /exports && chmod 0777 /exports"]
+    volumes:
+      - nfs-export:/exports
+    profiles: ["nfs-demo"]
+
+  nfs-server:
+    image: erichough/nfs-server:2.2.1
+    privileged: true
+    environment:
+      NFS_DISABLE_VERSION_3: "1"
+      NFS_EXPORT_0: "/exports *(rw,sync,no_subtree_check,no_root_squash,insecure,fsid=0)"
+    volumes:
+      - nfs-export:/exports
+    ports:
+      - "2049:2049/tcp"
+    depends_on:
+      nfs-init:
+        condition: service_completed_successfully
+    profiles: ["nfs-demo"]
+
+  server:
+    environment:
+      REPLAY_DIR: /shared/replays
+    volumes:
+      - replay-nfs:/shared/replays
+
+  analytics-worker:
+    environment:
+      REPLAY_DIR: /shared/replays
+    volumes:
+      - replay-nfs:/shared/replays
+
+volumes:
+  nfs-export:
+  replay-nfs:
+    driver: local
+    driver_opts:
+      type: nfs
+      o: "addr=${NFS_HOST:-127.0.0.1},rw,nfsvers=4,soft,timeo=30,retrans=2"
+      device: ":/"

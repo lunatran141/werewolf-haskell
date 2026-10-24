@@ -15,8 +15,9 @@ import Server.AnalyticsClient
   ( AnalyticsPublisher
   , newAnalyticsPublisherFromEnv
   , runAnalyticsPublisher
-  , subscribeRoomAnalytics
+  , subscribeRoomAnalyticsWithReplay
   )
+import Server.ReplayStore (ReplayStore, newReplayStore)
 import Server.Room (RoomRegistry, RoomRuntime(..), newRoomRegistry)
 import Server.Supervisor (Supervisor, forkSupervised, newSupervisor)
 import Server.WebSocket (webSocketApp)
@@ -30,15 +31,30 @@ main = do
   registry <- newRoomRegistry
   supervisor <- newSupervisor
   analyticsPublisher <- newAnalyticsPublisherFromEnv
+  replayDirectory <- lookupEnv "REPLAY_DIR"
+  let replayStore = replayStoreFromDirectory replayDirectory
   _ <- forkSupervised supervisor "analytics-publisher" $
     runAnalyticsPublisher analyticsPublisher
 
   putStrLn ("werewolf-server listening on port " <> show port)
-  run port (app registry (startRoomWorker supervisor analyticsPublisher))
+  run port
+    (app registry
+      (startRoomWorker supervisor analyticsPublisher replayStore))
 
-startRoomWorker :: Supervisor -> AnalyticsPublisher -> RoomRuntime -> IO ()
-startRoomWorker supervisor analyticsPublisher room = do
-  analyticsForwarder <- subscribeRoomAnalytics analyticsPublisher room
+replayStoreFromDirectory :: Maybe FilePath -> Maybe ReplayStore
+replayStoreFromDirectory (Just path)
+  | not (null path) = Just (newReplayStore path)
+replayStoreFromDirectory _ = Nothing
+
+startRoomWorker
+  :: Supervisor
+  -> AnalyticsPublisher
+  -> Maybe ReplayStore
+  -> RoomRuntime
+  -> IO ()
+startRoomWorker supervisor analyticsPublisher replayStore room = do
+  analyticsForwarder <-
+    subscribeRoomAnalyticsWithReplay replayStore analyticsPublisher room
   _ <- forkSupervised supervisor ("analytics-room-" ++ roomId room)
     analyticsForwarder
   _ <- forkSupervised supervisor ("game-loop-" ++ roomId room) $

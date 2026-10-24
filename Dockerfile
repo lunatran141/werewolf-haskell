@@ -18,7 +18,7 @@ RUN cabal build all --enable-tests \
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
-    && apt-get install --no-install-recommends -y ca-certificates curl \
+    && apt-get install --no-install-recommends -y ca-certificates curl netcat-openbsd \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 app
 WORKDIR /app

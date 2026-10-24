@@ -1,7 +1,7 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 -- | Kenh gui bat dong bo tu Game Server sang Analytics Worker.
--- Loi mang chi lam giu summary trong queue; khong bao gio lam dung GameLoop.
+-- Loi mang chi lam giu summary trong queue khong bao gio lam dung GameLoop.
 module Server.AnalyticsClient
   ( AnalyticsPublisher
   , newAnalyticsPublisher
@@ -9,6 +9,7 @@ module Server.AnalyticsClient
   , publishMatchSummary
   , runAnalyticsPublisher
   , subscribeRoomAnalytics
+  , subscribeRoomAnalyticsWithReplay
   , matchSummaryForUpdate
   ) where
 
@@ -27,7 +28,6 @@ import Control.Exception (IOException, bracket, catch)
 import Control.Monad (forever)
 import Network.Socket
   ( AddrInfo(..)
-  , Socket
   , SocketType(Stream)
   , addrAddress
   , close
@@ -43,6 +43,12 @@ import System.IO (hPutStrLn, stderr)
 import Domain.Types (DomainEvent(..), GameState(..))
 import Protocol.Analytics (MatchSummary(..), encodeMatchSummaryLine)
 import Server.Room (RoomRuntime(..), RoomUpdate(..))
+import Server.ReplayStore
+  ( ReplayStore
+  , readReplay
+  , renderStorageError
+  , writeReplay
+  )
 
 data AnalyticsPublisher = AnalyticsPublisher
   { publisherHost :: String
@@ -113,17 +119,45 @@ subscribeRoomAnalytics
   -> RoomRuntime
   -> IO (IO ())
 subscribeRoomAnalytics publisher room = do
+  subscribeRoomAnalyticsWithReplay Nothing publisher room
+
+-- | Ban X03 ghi replay da lam sach len shared storage truoc khi gui summary
+-- cho Worker. Moi loi storage chi duoc log va khong chan GameLoop.
+subscribeRoomAnalyticsWithReplay
+  :: Maybe ReplayStore
+  -> AnalyticsPublisher
+  -> RoomRuntime
+  -> IO (IO ())
+subscribeRoomAnalyticsWithReplay replayStore publisher room = do
   updates <- atomically (dupTChan (roomUpdates room))
   pure $ forever $ do
     update <- atomically (readTChan updates)
     case matchSummaryForUpdate room update of
       Nothing -> pure ()
       Just summary -> do
+        persistSharedReplay replayStore summary
         accepted <- publishMatchSummary publisher summary
         if accepted
           then pure ()
           else hPutStrLn stderr
             "analytics queue full; summary skipped without stopping game server"
+
+persistSharedReplay :: Maybe ReplayStore -> MatchSummary -> IO ()
+persistSharedReplay Nothing _ = pure ()
+persistSharedReplay (Just store) summary = do
+  written <- writeReplay store summary
+  case written of
+    Left err ->
+      hPutStrLn stderr ("replay storage warning: " <> renderStorageError err)
+    Right _ -> do
+      verified <- readReplay store (matchId summary)
+      case verified of
+        Right replay
+          | replay == summary -> pure ()
+          | otherwise -> hPutStrLn stderr
+              "replay storage warning: StorageConflict after write"
+        Left err ->
+          hPutStrLn stderr ("replay storage warning: " <> renderStorageError err)
 
 matchSummaryForUpdate :: RoomRuntime -> RoomUpdate -> Maybe MatchSummary
 matchSummaryForUpdate room update =
