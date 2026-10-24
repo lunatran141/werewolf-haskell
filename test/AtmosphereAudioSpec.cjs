@@ -30,10 +30,18 @@ function setupAudio() {
     pause() { this.paused = true; }
   }
   const storage = new Map();
+  const timers = new Map();
+  let nextTimerId = 1;
   const body = new Element();
   const state = {roomId: 'R', phase: 'Lobby', gameResult: null, reconnecting: false};
   const context = vm.createContext({Audio, document: {body, createElement: () => new Element()},
-    state, setTimeout() { return 1; }, clearTimeout() {},
+    state,
+    setTimeout(callback, delay) {
+      const id = nextTimerId++;
+      timers.set(id, {callback, delay});
+      return id;
+    },
+    clearTimeout(id) { timers.delete(id); },
     localStorage: {
       getItem(key) { return storage.get(key) ?? null; },
       setItem(key, value) { storage.set(key, value); }
@@ -44,7 +52,7 @@ function setupAudio() {
   vm.runInContext(source.slice(source.indexOf(marker)), context);
   const render = () => vm.runInContext('renderAtmosphere()', context);
   render();
-  return {body, played, render, state, storage};
+  return {body, played, render, state, storage, timers};
 }
 
 test('MP3 mở đầu đêm phát một lần, nhạc đêm lặp và dừng khi vào Day', () => {
@@ -60,6 +68,22 @@ test('MP3 mở đầu đêm phát một lần, nhạc đêm lặp và dừng khi
   render();
   assert.equal(played[1].paused, true);
   assert.equal(played[2].src, 'audio/day-intro.mp3');
+});
+
+test('Tiếng vào Day dừng sau 5 giây và không phát lại trong cùng Day', () => {
+  const {body, played, render, state, timers} = setupAudio();
+  state.phase = 'Day';
+  render();
+  const dayAudio = played[0];
+  const dayTimer = [...timers.values()].find(timer => timer.delay === 5000);
+  assert.ok(dayTimer, 'Day phải có thời hạn âm thanh 5 giây');
+  dayTimer.callback();
+  assert.equal(dayAudio.paused, true);
+  render();
+  const button = body.children[0].children[0];
+  button.fire('click');
+  button.fire('click');
+  assert.equal(played.length, 1, 'Bật lại âm thanh không phát lại tiếng gáy trong Day');
 });
 
 test('GameOver phát đúng nhạc thắng và không lặp lại khi render tiếp', () => {

@@ -1022,7 +1022,7 @@ function readAtmosphereSettings() {
 
 const savedAtmosphereSettings = readAtmosphereSettings();
 const atmosphere = {room: null, phase: null, result: null, overlay: null,
-  timer: null, audio: null, muted: savedAtmosphereSettings.muted,
+  timer: null, dayAudioTimer: null, audio: null, muted: savedAtmosphereSettings.muted,
   volume: savedAtmosphereSettings.volume, initialized: false};
 
 function saveAtmosphereSettings() {
@@ -1034,6 +1034,8 @@ function saveAtmosphereSettings() {
 }
 
 function stopAtmosphereAudio() {
+  if (atmosphere.dayAudioTimer !== null) clearTimeout(atmosphere.dayAudioTimer);
+  atmosphere.dayAudioTimer = null;
   if (!atmosphere.audio) return;
   // Xoa callback truoc khi dung de bai cu khong khoi dong lai nhac dem.
   atmosphere.audio.onended = null;
@@ -1073,6 +1075,15 @@ function playAtmosphereSound(kind, onEnded = null) {
       };
       // Neu file mo dau bi loi, van thu chay nhac nen cua dem.
       audio.onerror = audio.onended;
+    }
+    if (kind === "dayIntro") {
+      // Chỉ phát tiếng vào Day trong 5 giây đầu; render hoặc bật tiếng lại không kéo dài thời hạn.
+      atmosphere.dayAudioTimer = setTimeout(() => {
+        if (atmosphere.audio === audio) stopAtmosphereAudio();
+      }, 5000);
+      audio.onended = () => {
+        if (atmosphere.audio === audio) stopAtmosphereAudio();
+      };
     }
     resumeAtmosphereAudio();
   } catch { /* Am thanh tuy chon, khong lam gian doan van choi. */ }
