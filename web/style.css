@@ -1218,11 +1218,19 @@ body[data-phase="Voting"] .twinkling-stars {
 }
 
 
-/* Local phase/result ambience: overlays never intercept game controls. */
-.ambience-toggle { position: fixed; right: 14px; bottom: 14px; z-index: 150;
+/* Dieu khien am thanh nam canh nhau; overlay khong chan nut game. */
+.ambience-controls { position: fixed; right: 14px; bottom: 14px; z-index: 150;
+  display: flex; align-items: center; gap: 8px; max-width: calc(100vw - 28px);
+  padding: 6px; border: 1px solid #a78bfa; border-radius: 16px;
+  color: #fff; background: #1e1b4be6; font-size: 12px; }
+.ambience-volume-label { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+.ambience-volume-label input { width: 84px; accent-color: #c4b5fd; cursor: pointer; }
+.ambience-volume-value { min-width: 32px; text-align: right; }
+.ambience-toggle { flex: none;
   border: 1px solid #a78bfa; border-radius: 999px; padding: 8px 12px;
   color: #fff; background: #1e1b4be6; cursor: pointer; font: inherit; font-size: 12px; }
-.ambience-toggle:focus-visible { outline: 3px solid #fbbf24; outline-offset: 3px; }
+.ambience-toggle:focus-visible, .ambience-volume-label input:focus-visible {
+  outline: 3px solid #fbbf24; outline-offset: 3px; }
 .victory-atmosphere { position: fixed; inset: 0; z-index: 120; pointer-events: none;
   overflow: hidden; animation: victory-fade 5.2s both; }
 .village-victory { background: radial-gradient(ellipse at top, #fbbf242b, transparent 70%); }

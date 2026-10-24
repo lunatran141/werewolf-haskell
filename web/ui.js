@@ -996,60 +996,92 @@ function showDayTransition() {
 }
 
 
-// Local ambience: presentation only; the Server still owns phase and result.
+// Am thanh chi la phan hien thi: Server van quyet dinh phase va ket qua.
+const ATMOSPHERE_TRACKS = {
+  nightIntro: "audio/night-intro.mp3",
+  nightLoop: "audio/night-loop.mp3",
+  dayIntro: "audio/day-intro.mp3",
+  villageWin: "audio/village-win.mp3",
+  wolvesWin: "audio/wolves-win.mp3"
+};
+const ATMOSPHERE_SETTINGS_KEY = "werewolf-audio-settings";
+
+function readAtmosphereSettings() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ATMOSPHERE_SETTINGS_KEY) || "null");
+    return {
+      muted: saved?.muted === true,
+      volume: Number.isFinite(saved?.volume)
+        ? Math.max(0, Math.min(1, saved.volume)) : 0.5
+    };
+  } catch {
+    // Neu trinh duyet chan localStorage, van phat voi muc am luong mac dinh.
+    return {muted: false, volume: 0.5};
+  }
+}
+
+const savedAtmosphereSettings = readAtmosphereSettings();
 const atmosphere = {room: null, phase: null, result: null, overlay: null,
-  timer: null, audio: null, muted: false, initialized: false};
+  timer: null, audio: null, muted: savedAtmosphereSettings.muted,
+  volume: savedAtmosphereSettings.volume, initialized: false};
+
+function saveAtmosphereSettings() {
+  try {
+    localStorage.setItem(ATMOSPHERE_SETTINGS_KEY, JSON.stringify({
+      muted: atmosphere.muted, volume: atmosphere.volume
+    }));
+  } catch { /* Khong luu duoc tuy chon thi van choi binh thuong. */ }
+}
+
+function stopAtmosphereAudio() {
+  if (!atmosphere.audio) return;
+  // Xoa callback truoc khi dung de bai cu khong khoi dong lai nhac dem.
+  atmosphere.audio.onended = null;
+  atmosphere.audio.onerror = null;
+  atmosphere.audio.pause();
+  atmosphere.audio = null;
+}
 
 function stopAtmosphere() {
   if (atmosphere.timer !== null) clearTimeout(atmosphere.timer);
   atmosphere.timer = null;
   if (atmosphere.overlay && typeof atmosphere.overlay.remove === "function") atmosphere.overlay.remove();
   atmosphere.overlay = null;
-  if (atmosphere.audio) {
-    atmosphere.audio.close().catch(() => {});
-    atmosphere.audio = null;
-  }
+  stopAtmosphereAudio();
 }
 
-function playAtmosphereSound(kind) {
-  if (atmosphere.muted) return;
-  const AudioEngine = globalThis.AudioContext || globalThis.webkitAudioContext;
-  if (!AudioEngine) return;
+function resumeAtmosphereAudio() {
+  if (!atmosphere.audio || atmosphere.muted) return;
   try {
-    if (atmosphere.audio) atmosphere.audio.close().catch(() => {});
-    const audio = new AudioEngine();
+    // Trinh duyet co the chan autoplay; lan bam tiep theo se thu phat lai.
+    const result = atmosphere.audio.play();
+    if (result && typeof result.catch === "function") result.catch(() => {});
+  } catch { /* Am thanh loi khong duoc anh huong thao tac game. */ }
+}
+
+function playAtmosphereSound(kind, onEnded = null) {
+  if (atmosphere.muted || typeof Audio !== "function") return;
+  stopAtmosphereAudio();
+  try {
+    const audio = new Audio(ATMOSPHERE_TRACKS[kind]);
+    audio.volume = atmosphere.volume;
+    audio.loop = kind === "nightLoop";
     atmosphere.audio = audio;
-    // Autoplay may be blocked: never replay an old cue after a later click.
-    audio.resume().then(() => {
-      if (atmosphere.audio !== audio || atmosphere.muted || audio.state !== "running") return;
-      const now = audio.currentTime;
-      const notes = kind === "rooster"
-        ? [[0, .23, 620, 840], [.27, .23, 710, 940], [.55, .25, 650, 920], [.85, .95, 780, 460]]
-        : [[0, 2.8, 180, 410], [.3, 2.5, 184, 398]];
-      for (const [delay, duration, low, high] of notes) {
-        const voice = audio.createOscillator();
-        const volume = audio.createGain();
-        voice.type = kind === "rooster" ? "triangle" : "sine";
-        voice.frequency.setValueAtTime(low, now + delay);
-        voice.frequency.exponentialRampToValueAtTime(high, now + delay + duration * .4);
-        voice.frequency.exponentialRampToValueAtTime(low * .85, now + delay + duration);
-        volume.gain.setValueAtTime(0, now + delay);
-        volume.gain.linearRampToValueAtTime(.065, now + delay + .08);
-        volume.gain.exponentialRampToValueAtTime(.001, now + delay + duration);
-        voice.connect(volume).connect(audio.destination);
-        voice.start(now + delay); voice.stop(now + delay + duration);
-      }
-      setTimeout(() => {
-        audio.close().catch(() => {});
-        if (atmosphere.audio === audio) atmosphere.audio = null;
-      }, 3400);
-    }).catch(() => {});
-  } catch { /* Sound is optional; game controls remain usable. */ }
+    if (onEnded) {
+      audio.onended = () => {
+        if (atmosphere.audio === audio && state.phase === "Night") onEnded();
+      };
+      // Neu file mo dau bi loi, van thu chay nhac nen cua dem.
+      audio.onerror = audio.onended;
+    }
+    resumeAtmosphereAudio();
+  } catch { /* Am thanh tuy chon, khong lam gian doan van choi. */ }
 }
 
 function showVictoryAtmosphere(result) {
   stopAtmosphere();
   if (result !== "WinnerVillage" && result !== "WinnerWolves") return;
+  playAtmosphereSound(result === "WinnerVillage" ? "villageWin" : "wolvesWin");
   const overlay = document.createElement("div");
   overlay.className = "victory-atmosphere " + (result === "WinnerVillage" ? "village-victory" : "wolves-victory");
   overlay.setAttribute("aria-hidden", "true");
@@ -1083,7 +1115,6 @@ function showVictoryAtmosphere(result) {
     howl.className = "victory-howl";
     howl.textContent = "AWOOOO…";
     overlay.append(moon, wolf, howl);
-    playAtmosphereSound("wolf");
   }
   document.body.appendChild(overlay);
   atmosphere.overlay = overlay;
@@ -1097,26 +1128,52 @@ function showVictoryAtmosphere(result) {
 function renderAtmosphere() {
   if (!atmosphere.initialized && typeof document.body.addEventListener === "function") {
     atmosphere.initialized = true;
+    const controls = document.createElement("div");
+    controls.className = "ambience-controls";
     const button = document.createElement("button");
     button.className = "ambience-toggle";
     button.type = "button";
-    button.textContent = "Âm thanh: Bật";
-    button.setAttribute("aria-pressed", "true");
+    button.textContent = atmosphere.muted ? "Âm thanh: Tắt" : "Âm thanh: Bật";
+    button.setAttribute("aria-pressed", String(!atmosphere.muted));
     button.addEventListener("click", () => {
       atmosphere.muted = !atmosphere.muted;
       button.textContent = atmosphere.muted ? "Âm thanh: Tắt" : "Âm thanh: Bật";
       button.setAttribute("aria-pressed", String(!atmosphere.muted));
-      if (atmosphere.muted && atmosphere.audio) {
-        atmosphere.audio.close().catch(() => {}); atmosphere.audio = null;
+      saveAtmosphereSettings();
+      if (atmosphere.muted) {
+        if (atmosphere.audio) atmosphere.audio.pause();
+      } else if (atmosphere.audio) {
+        resumeAtmosphereAudio();
+      } else if (state.phase === "Night") {
+        // Bat lai giua dem: vao thang ban nhac lap, khong phat lai tieng mo dau.
+        playAtmosphereSound("nightLoop");
       }
     });
-    document.body.appendChild(button);
-    // Unlock the audio device during a user gesture (browser autoplay policy).
+    const volumeLabel = document.createElement("label");
+    volumeLabel.className = "ambience-volume-label";
+    volumeLabel.textContent = "Âm lượng";
+    const volumeSlider = document.createElement("input");
+    volumeSlider.type = "range";
+    volumeSlider.min = "0";
+    volumeSlider.max = "100";
+    volumeSlider.step = "1";
+    volumeSlider.value = String(Math.round(atmosphere.volume * 100));
+    const volumeValue = document.createElement("span");
+    volumeValue.className = "ambience-volume-value";
+    volumeValue.textContent = `${volumeSlider.value}%`;
+    volumeSlider.addEventListener("input", () => {
+      atmosphere.volume = Number(volumeSlider.value) / 100;
+      volumeValue.textContent = `${volumeSlider.value}%`;
+      if (atmosphere.audio) atmosphere.audio.volume = atmosphere.volume;
+      saveAtmosphereSettings();
+    });
+    volumeLabel.appendChild(volumeSlider);
+    controls.append(button, volumeLabel, volumeValue);
+    document.body.appendChild(controls);
+    // Thu phat lai sau thao tac nguoi dung neu browser da chan autoplay.
     document.body.addEventListener("pointerdown", () => {
-      const Engine = globalThis.AudioContext || globalThis.webkitAudioContext;
-      if (!Engine || atmosphere.muted || atmosphere.audio) return;
-      try { const a = new Engine(); a.resume().then(() => a.close()).catch(() => {}); } catch {}
-    }, {once: true});
+      if (atmosphere.audio && atmosphere.audio.paused) resumeAtmosphereAudio();
+    });
   }
   if (!state.roomId || atmosphere.room !== state.roomId || state.phase === "Lobby") {
     stopAtmosphere();
@@ -1129,12 +1186,16 @@ function renderAtmosphere() {
   if (state.reconnecting) {
     atmosphere.phase = state.phase;
     atmosphere.result = state.gameResult;
+    // Reconnect khong lap lai tieng mo dau, nhung tiep tuc nhac nen dem.
+    if (state.phase === "Night" && !atmosphere.audio) playAtmosphereSound("nightLoop");
     return;
   }
   if (atmosphere.phase !== state.phase) {
     stopAtmosphere();
-    if (state.phase === "Day") playAtmosphereSound("rooster");
-    if (state.phase === "Night") playAtmosphereSound("wolf");
+    if (state.phase === "Day") playAtmosphereSound("dayIntro");
+    if (state.phase === "Night") {
+      playAtmosphereSound("nightIntro", () => playAtmosphereSound("nightLoop"));
+    }
     atmosphere.phase = state.phase;
   }
   if (state.phase === "GameOver" && state.gameResult && atmosphere.result !== state.gameResult) {
