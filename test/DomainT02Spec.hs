@@ -556,7 +556,7 @@ spec = do
           (listOf1 (elements ['a'..'z']))
           $ \pid ->
             forAll
-              (listOf1 (elements ['A'..'Z']))
+              (chooseInt (1, 30) >>= \nameLength -> vectorOf nameLength (elements ['A'..'Z']))
               $ \name ->
                 case mkPlayer pid ("  " ++ name ++ "  ") of
                   Right p ->

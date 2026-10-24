@@ -61,7 +61,9 @@ import qualified Network.WebSockets as WS
 
 import Protocol.Json
 
-  ( decodeClientMessage
+  ( clientMessageWithinLimit
+
+  , decodeClientMessage
 
   , encodeServerMessage
 
@@ -1113,31 +1115,36 @@ webSocketApp registry startWorker pending = do
 
           WS.Text payload _ ->
 
-            case decodeClientMessage payload of
+            if not (clientMessageWithinLimit payload)
+              then sendToClient outbound
+                (MsgRejected Nothing "MESSAGE_TOO_LARGE"
+                  "Tin gui len vuot qua gioi han cho phep.")
+              else
+                case decodeClientMessage payload of
 
-              Left _ ->
+                  Left _ ->
 
-                sendToClient outbound
+                    sendToClient outbound
 
-                  (MsgRejected Nothing "INVALID_JSON"
+                      (MsgRejected Nothing "INVALID_JSON"
 
-                    "JSON khong hop le.")
+                        "JSON khong hop le.")
 
-              Right clientMessage ->
+                  Right clientMessage ->
 
-                handleClientMessage
+                    handleClientMessage
 
-                  registry
+                      registry
 
-                  startWorker
+                      startWorker
 
-                  actorRef
+                      actorRef
 
-                  sessionRef
+                      sessionRef
 
-                  outbound
+                      outbound
 
-                  clientMessage
+                      clientMessage
 
           WS.Binary _ ->
 
