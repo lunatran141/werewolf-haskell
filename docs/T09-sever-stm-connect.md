@@ -1,5 +1,9 @@
 # T09 — Server Runtime, STM và Reconnect
 
+**Dự án:** Werewolf Haskell
+**Task:** T09 – Sever Runtime & Reconnect
+**Owner:** TV5
+
 ## 1. Mục tiêu và phạm vi
 
 T09 hoàn thiện đường đi của lệnh và trạng thái giữa Browser, WebSocket và Room Worker: lệnh có giới hạn chờ, request có khóa chống áp dụng lặp, reconnect lấy lại snapshot có version, và kết nối hụt cập nhật tự đồng bộ lại.
