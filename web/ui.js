@@ -808,6 +808,7 @@ function renderHunter() {
 }
 
 function render() {
+  renderAtmosphere();
   document.body.dataset.phase = state.phase;
   document.body.classList.toggle("phase-day", state.phase === "Day");
   document.body.classList.toggle("phase-night", state.phase === "Night");
@@ -992,4 +993,152 @@ function showDayTransition() {
     overlay.remove();
     dayTransitionTimer = null;
   }, 1600);
+}
+
+
+// Local ambience: presentation only; the Server still owns phase and result.
+const atmosphere = {room: null, phase: null, result: null, overlay: null,
+  timer: null, audio: null, muted: false, initialized: false};
+
+function stopAtmosphere() {
+  if (atmosphere.timer !== null) clearTimeout(atmosphere.timer);
+  atmosphere.timer = null;
+  if (atmosphere.overlay && typeof atmosphere.overlay.remove === "function") atmosphere.overlay.remove();
+  atmosphere.overlay = null;
+  if (atmosphere.audio) {
+    atmosphere.audio.close().catch(() => {});
+    atmosphere.audio = null;
+  }
+}
+
+function playAtmosphereSound(kind) {
+  if (atmosphere.muted) return;
+  const AudioEngine = globalThis.AudioContext || globalThis.webkitAudioContext;
+  if (!AudioEngine) return;
+  try {
+    if (atmosphere.audio) atmosphere.audio.close().catch(() => {});
+    const audio = new AudioEngine();
+    atmosphere.audio = audio;
+    // Autoplay may be blocked: never replay an old cue after a later click.
+    audio.resume().then(() => {
+      if (atmosphere.audio !== audio || atmosphere.muted || audio.state !== "running") return;
+      const now = audio.currentTime;
+      const notes = kind === "rooster"
+        ? [[0, .23, 620, 840], [.27, .23, 710, 940], [.55, .25, 650, 920], [.85, .95, 780, 460]]
+        : [[0, 2.8, 180, 410], [.3, 2.5, 184, 398]];
+      for (const [delay, duration, low, high] of notes) {
+        const voice = audio.createOscillator();
+        const volume = audio.createGain();
+        voice.type = kind === "rooster" ? "triangle" : "sine";
+        voice.frequency.setValueAtTime(low, now + delay);
+        voice.frequency.exponentialRampToValueAtTime(high, now + delay + duration * .4);
+        voice.frequency.exponentialRampToValueAtTime(low * .85, now + delay + duration);
+        volume.gain.setValueAtTime(0, now + delay);
+        volume.gain.linearRampToValueAtTime(.065, now + delay + .08);
+        volume.gain.exponentialRampToValueAtTime(.001, now + delay + duration);
+        voice.connect(volume).connect(audio.destination);
+        voice.start(now + delay); voice.stop(now + delay + duration);
+      }
+      setTimeout(() => {
+        audio.close().catch(() => {});
+        if (atmosphere.audio === audio) atmosphere.audio = null;
+      }, 3400);
+    }).catch(() => {});
+  } catch { /* Sound is optional; game controls remain usable. */ }
+}
+
+function showVictoryAtmosphere(result) {
+  stopAtmosphere();
+  if (result !== "WinnerVillage" && result !== "WinnerWolves") return;
+  const overlay = document.createElement("div");
+  overlay.className = "victory-atmosphere " + (result === "WinnerVillage" ? "village-victory" : "wolves-victory");
+  overlay.setAttribute("aria-hidden", "true");
+  const title = document.createElement("div");
+  title.className = "victory-caption";
+  title.textContent = result === "WinnerVillage" ? "DÂN LÀNG CHIẾN THẮNG!" : "PHE SÓI CHIẾN THẮNG!";
+  overlay.appendChild(title);
+  if (result === "WinnerVillage") {
+    for (let burst = 0; burst < 5; burst++) {
+      const origin = document.createElement("div");
+      origin.className = "firework-burst";
+      origin.style.setProperty("--left", `${14 + burst * 18}%`);
+      origin.style.setProperty("--top", `${22 + (burst % 2) * 24}%`);
+      origin.style.setProperty("--delay", `${burst * .32}s`);
+      origin.style.setProperty("--color", ["#fbbf24", "#f472b6", "#67e8f9", "#c4b5fd", "#86efac"][burst]);
+      for (let ray = 0; ray < 16; ray++) {
+        const spark = document.createElement("span");
+        spark.style.setProperty("--angle", `${ray * 22.5}deg`);
+        origin.appendChild(spark);
+      }
+      overlay.appendChild(origin);
+    }
+  } else {
+    const moon = document.createElement("div");
+    moon.className = "victory-moon";
+    moon.textContent = "🌕";
+    const wolf = document.createElement("div");
+    wolf.className = "victory-wolf";
+    wolf.textContent = "🐺";
+    const howl = document.createElement("div");
+    howl.className = "victory-howl";
+    howl.textContent = "AWOOOO…";
+    overlay.append(moon, wolf, howl);
+    playAtmosphereSound("wolf");
+  }
+  document.body.appendChild(overlay);
+  atmosphere.overlay = overlay;
+  atmosphere.timer = setTimeout(() => {
+    if (typeof overlay.remove === "function") overlay.remove();
+    if (atmosphere.overlay === overlay) atmosphere.overlay = null;
+    atmosphere.timer = null;
+  }, 5200);
+}
+
+function renderAtmosphere() {
+  if (!atmosphere.initialized && typeof document.body.addEventListener === "function") {
+    atmosphere.initialized = true;
+    const button = document.createElement("button");
+    button.className = "ambience-toggle";
+    button.type = "button";
+    button.textContent = "Âm thanh: Bật";
+    button.setAttribute("aria-pressed", "true");
+    button.addEventListener("click", () => {
+      atmosphere.muted = !atmosphere.muted;
+      button.textContent = atmosphere.muted ? "Âm thanh: Tắt" : "Âm thanh: Bật";
+      button.setAttribute("aria-pressed", String(!atmosphere.muted));
+      if (atmosphere.muted && atmosphere.audio) {
+        atmosphere.audio.close().catch(() => {}); atmosphere.audio = null;
+      }
+    });
+    document.body.appendChild(button);
+    // Unlock the audio device during a user gesture (browser autoplay policy).
+    document.body.addEventListener("pointerdown", () => {
+      const Engine = globalThis.AudioContext || globalThis.webkitAudioContext;
+      if (!Engine || atmosphere.muted || atmosphere.audio) return;
+      try { const a = new Engine(); a.resume().then(() => a.close()).catch(() => {}); } catch {}
+    }, {once: true});
+  }
+  if (!state.roomId || atmosphere.room !== state.roomId || state.phase === "Lobby") {
+    stopAtmosphere();
+    atmosphere.room = state.roomId;
+    atmosphere.phase = state.phase;
+    atmosphere.result = null;
+    return;
+  }
+  // Reconnect restores the current scene without repeating its entrance cue.
+  if (state.reconnecting) {
+    atmosphere.phase = state.phase;
+    atmosphere.result = state.gameResult;
+    return;
+  }
+  if (atmosphere.phase !== state.phase) {
+    stopAtmosphere();
+    if (state.phase === "Day") playAtmosphereSound("rooster");
+    if (state.phase === "Night") playAtmosphereSound("wolf");
+    atmosphere.phase = state.phase;
+  }
+  if (state.phase === "GameOver" && state.gameResult && atmosphere.result !== state.gameResult) {
+    atmosphere.result = state.gameResult;
+    showVictoryAtmosphere(state.gameResult);
+  }
 }

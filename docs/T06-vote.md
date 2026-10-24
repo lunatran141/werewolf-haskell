@@ -1,5 +1,9 @@
 # T06 — Vote Rules + Protocol + Handler + UI
 
+**Dự án:** Werewolf Haskell
+**Task:** T06 – Vote Rules
+**Owner:** TV5
+
 ## Phạm vi và điểm nối với nhóm
 
 T06 xử lý từ lúc phòng vào Voting đến khi chốt phiếu, xử lý Hunter, công bố ID người chết và chuyển Night/GameOver. Theo hợp đồng T01/T02 mới, vai thật của mọi người chỉ được công khai tại GameOver. Hunter chết ở Night cũng được xử lý trước khi T05 hoàn tất sang Day. Không thay đổi preset 8/9 người, luật Night hay cách tăng vòng của T04.

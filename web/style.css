@@ -1216,3 +1216,40 @@ body[data-phase="Voting"] .twinkling-stars {
     animation: none;
   }
 }
+
+
+/* Local phase/result ambience: overlays never intercept game controls. */
+.ambience-toggle { position: fixed; right: 14px; bottom: 14px; z-index: 150;
+  border: 1px solid #a78bfa; border-radius: 999px; padding: 8px 12px;
+  color: #fff; background: #1e1b4be6; cursor: pointer; font: inherit; font-size: 12px; }
+.ambience-toggle:focus-visible { outline: 3px solid #fbbf24; outline-offset: 3px; }
+.victory-atmosphere { position: fixed; inset: 0; z-index: 120; pointer-events: none;
+  overflow: hidden; animation: victory-fade 5.2s both; }
+.village-victory { background: radial-gradient(ellipse at top, #fbbf242b, transparent 70%); }
+.wolves-victory { background: radial-gradient(ellipse at center, #312e8199, #020617bb); }
+.victory-caption { position: absolute; top: 12%; width: 100%; text-align: center;
+  font-size: clamp(22px, 5vw, 52px); font-weight: 900; color: #fef3c7;
+  text-shadow: 0 2px 20px #000; padding: 0 12px; box-sizing: border-box; }
+.firework-burst { position: absolute; left: var(--left); top: var(--top); }
+.firework-burst span { position: absolute; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--color); box-shadow: 0 0 12px var(--color); opacity: 0;
+  animation: victory-spark 1.8s var(--delay) 2 ease-out both; }
+.victory-moon { position: absolute; top: 25%; left: 50%; transform: translateX(-50%);
+  font-size: clamp(100px, 24vw, 210px); filter: drop-shadow(0 0 35px #c4b5fd); }
+.victory-wolf { position: absolute; top: 46%; width: 100%; text-align: center;
+  font-size: clamp(110px, 25vw, 220px); animation: victory-wolf 1.6s ease-in-out infinite; }
+.victory-howl { position: absolute; top: 78%; width: 100%; text-align: center;
+  letter-spacing: .15em; font-size: clamp(20px, 5vw, 36px); color: #e0e7ff;
+  animation: victory-howl 1.6s ease-out infinite; }
+@keyframes victory-spark {
+  0% { opacity: 0; transform: rotate(var(--angle)) translateX(0) scale(.3); }
+  12% { opacity: 1; }
+  85%, 100% { opacity: 0; transform: rotate(var(--angle)) translateX(clamp(65px, 12vw, 170px)) scale(.3); }
+}
+@keyframes victory-fade { 0% {opacity: 0} 8%, 82% {opacity: 1} 100% {opacity: 0} }
+@keyframes victory-wolf { 0%,100% {transform: rotate(-8deg) scale(1)} 50% {transform: rotate(-18deg) scale(1.08)} }
+@keyframes victory-howl { from {opacity: 0; transform: translateY(10px)} 45% {opacity: 1} to {opacity: 0; transform: translateY(-14px)} }
+@media (prefers-reduced-motion: reduce) {
+  .victory-atmosphere, .victory-wolf, .victory-howl, .firework-burst span { animation: none; }
+  .firework-burst span { opacity: 1; transform: rotate(var(--angle)) translateX(65px); }
+}
