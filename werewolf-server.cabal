@@ -21,6 +21,7 @@ library
     , Server.AnalyticsClient
     , Server.Connection
     , Server.GameLoop
+    , Server.ReplayStore
     , Server.Room
     , Server.Supervisor
     , Server.WebSocket
@@ -100,6 +101,21 @@ test-suite x02-analytics-client-test
   ghc-options: -Wall -Wcompat
   build-depends:
       base >=4.17 && <5
+    , hspec >=2.10
+    , werewolf-server
+
+-- X03: ReplayStore tren shared/NFS storage, fault handling va privacy.
+test-suite x03-replay-store-test
+  type: exitcode-stdio-1.0
+  main-is: X03ReplayStoreSpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat
+  build-depends:
+      base >=4.17 && <5
+    , bytestring >=0.11
+    , directory >=1.3
+    , filepath >=1.4
     , hspec >=2.10
     , werewolf-server
 

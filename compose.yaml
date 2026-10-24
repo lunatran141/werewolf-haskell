@@ -35,6 +35,12 @@ services:
     init: true
     read_only: true
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 $${ANALYTICS_PORT:-9090}"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
 
 volumes:
   analytics-data:
