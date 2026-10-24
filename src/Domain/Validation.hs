@@ -36,6 +36,8 @@ validatePlayerName name
 
   | null clean = Left InvalidPlayerName
 
+  | length clean > 30 = Left InvalidPlayerName
+
   | otherwise  = Right clean
 
   where

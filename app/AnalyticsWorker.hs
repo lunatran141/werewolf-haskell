@@ -1,7 +1,7 @@
 module Main (main) where
 
 import Control.Concurrent (forkFinally)
-import Control.Exception (bracket, displayException)
+import Control.Exception (bracket)
 import Control.Monad (forever, void)
 import qualified Data.ByteString as BS
 import Network.Socket
@@ -24,13 +24,7 @@ import Network.Socket
   )
 import qualified Network.Socket.ByteString as SocketBS
 import System.Environment (lookupEnv)
-import System.IO
-  ( BufferMode(LineBuffering)
-  , hPutStrLn
-  , hSetBuffering
-  , stderr
-  , stdout
-  )
+import System.IO (BufferMode(LineBuffering), hSetBuffering, stderr, stdout)
 
 import Analytics.Store
   ( AnalyticsStore
@@ -48,6 +42,7 @@ import Server.ReplayStore
   , readReplay
   , renderStorageError
   )
+import Server.SafeLog (logInfo, logWarning)
 
 main :: IO ()
 main = withSocketsDo $ do
@@ -61,8 +56,8 @@ main = withSocketsDo $ do
   store <- newAnalyticsStore outputPath
   address <- resolveAddress port
   bracket (openSocket address) close $ \listener -> do
-    putStrLn ("analytics-worker listening on TCP port " <> port)
-    putStrLn ("analytics-worker output: " <> outputPath)
+    logInfo "analytics-worker" "worker_listening" [("port", port)]
+    logInfo "analytics-worker" "output_configured" [("path", outputPath)]
     forever $ do
       (connection, _) <- accept listener
       void $ forkFinally
@@ -70,8 +65,8 @@ main = withSocketsDo $ do
         (\result -> do
           close connection
           case result of
-            Left err -> hPutStrLn stderr
-              ("analytics connection stopped: " <> displayException err)
+            Left _ -> logWarning "analytics-worker" "connection_stopped"
+              [("errorClass", "unexpected_exception")]
             Right () -> pure ())
 
 resolveAddress :: String -> IO AddrInfo
@@ -127,14 +122,13 @@ serveConnection store replayStore connection = receiveLoop BS.empty
       | BS.null line = pure ()
       | otherwise =
           case decodeMatchSummaryLine line of
-            Left err -> hPutStrLn stderr
-              ("analytics rejected invalid JSON line: " <> err)
+            Left _ -> logWarning "analytics-worker" "invalid_summary_json" []
             Right summary -> do
               verifySharedReplay replayStore summary
               result <- recordMatchSummary store summary
               case result of
-                SummaryStored -> putStrLn "analytics stored match summary"
-                SummaryDuplicate -> putStrLn "analytics ignored duplicate matchId"
+                SummaryStored -> logInfo "analytics-worker" "summary_stored" []
+                SummaryDuplicate -> logInfo "analytics-worker" "summary_duplicate" []
 
 verifySharedReplay :: Maybe ReplayStore -> MatchSummary -> IO ()
 verifySharedReplay Nothing _ = pure ()
@@ -142,8 +136,8 @@ verifySharedReplay (Just store) summary = do
   replay <- readReplay store (matchId summary)
   case replay of
     Right stored
-      | stored == summary -> putStrLn "analytics verified shared replay"
-      | otherwise -> hPutStrLn stderr
-          "analytics replay warning: StorageConflict"
-    Left err -> hPutStrLn stderr
-      ("analytics replay warning: " <> renderStorageError err)
+      | stored == summary -> logInfo "analytics-worker" "replay_verified" []
+      | otherwise -> logWarning "analytics-worker" "replay_verification_failed"
+          [("reason", "StorageConflict")]
+    Left err -> logWarning "analytics-worker" "replay_verification_failed"
+      [("reason", renderStorageError err)]

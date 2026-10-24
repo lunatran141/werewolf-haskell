@@ -69,6 +69,12 @@ testState phase pendingHunter roster =
     , gamePendingHunter = pendingHunter
     }
 
+unwrapRight :: Show error => Either error value -> value
+unwrapRight result =
+  case result of
+    Right value -> value
+    Left err -> error ("Expected Right, received Left: " ++ show err)
+
 main :: IO ()
 main =
   hspec $ do
@@ -85,14 +91,14 @@ main =
             }
 
       it "thanh vien khong phai Host cung tu roi duoc" $ do
-        let Right (next, events) = applyCommand finished (Leave "p2")
+        let (next, events) = unwrapRight (applyCommand finished (Leave "p2"))
         map playerId (gamePlayers next) `shouldNotContain` ["p2"]
         gameHost next `shouldBe` "p1"
         gamePhase next `shouldBe` GameOver
         events `shouldBe` [PlayerLeft "p2"]
 
       it "Host roi thi chuyen Host cho nguoi con lai" $ do
-        let Right (next, events) = applyCommand finished (Leave "p1")
+        let (next, events) = unwrapRight (applyCommand finished (Leave "p1"))
         gameHost next `shouldBe` "p2"
         events `shouldBe` [PlayerLeft "p1", HostChanged "p2"]
 
@@ -446,7 +452,8 @@ main =
             { gameConfiguredRoles = map fst roster }
 
       it "chua du tat ca nguoi song thi van o Day" $ do
-        let Right (next, events) = applyCommand dayState (SkipDiscussion "p1")
+        let (next, events) = unwrapRight
+              (applyCommand dayState (SkipDiscussion "p1"))
         gamePhase next `shouldBe` Day
         gameDiscussionSkips next `shouldBe` ["p1"]
         events `shouldBe` []
@@ -454,7 +461,8 @@ main =
       it "du tat ca nguoi song thi chuyen ngay sang Voting" $ do
         let beforeLast = dayState
               { gameDiscussionSkips = ["p1", "p2", "p3", "p4", "p5", "p6", "p7"] }
-            Right (next, events) = applyCommand beforeLast (SkipDiscussion "p8")
+            (next, events) = unwrapRight
+              (applyCommand beforeLast (SkipDiscussion "p8"))
         gamePhase next `shouldBe` Voting
         gameDiscussionSkips next `shouldBe` []
         events `shouldBe` [PhaseChanged Voting]
