@@ -38,7 +38,6 @@ import Network.Socket
   )
 import qualified Network.Socket.ByteString as SocketBS
 import System.Environment (lookupEnv)
-import System.IO (hPutStrLn, stderr)
 
 import Domain.Types (DomainEvent(..), GameState(..))
 import Protocol.Analytics (MatchSummary(..), encodeMatchSummaryLine)
@@ -49,6 +48,7 @@ import Server.ReplayStore
   , renderStorageError
   , writeReplay
   )
+import Server.SafeLog (logWarning)
 
 data AnalyticsPublisher = AnalyticsPublisher
   { publisherHost :: String
@@ -89,8 +89,8 @@ runAnalyticsPublisher publisher = forever $ do
       if delivered
         then pure ()
         else do
-          hPutStrLn stderr
-            "analytics-worker unavailable; game server continues and will retry"
+          logWarning "analytics-publisher" "delivery_retry"
+            [("reason", "worker_unavailable")]
           threadDelay 2000000
           retryUntilDelivered summary
 
@@ -139,8 +139,8 @@ subscribeRoomAnalyticsWithReplay replayStore publisher room = do
         accepted <- publishMatchSummary publisher summary
         if accepted
           then pure ()
-          else hPutStrLn stderr
-            "analytics queue full; summary skipped without stopping game server"
+          else logWarning "analytics-publisher" "queue_full"
+            [("action", "summary_skipped")]
 
 persistSharedReplay :: Maybe ReplayStore -> MatchSummary -> IO ()
 persistSharedReplay Nothing _ = pure ()
@@ -148,16 +148,18 @@ persistSharedReplay (Just store) summary = do
   written <- writeReplay store summary
   case written of
     Left err ->
-      hPutStrLn stderr ("replay storage warning: " <> renderStorageError err)
+      logWarning "replay-store" "write_failed"
+        [("reason", renderStorageError err)]
     Right _ -> do
       verified <- readReplay store (matchId summary)
       case verified of
         Right replay
           | replay == summary -> pure ()
-          | otherwise -> hPutStrLn stderr
-              "replay storage warning: StorageConflict after write"
+          | otherwise -> logWarning "replay-store" "verification_failed"
+              [("reason", "StorageConflict")]
         Left err ->
-          hPutStrLn stderr ("replay storage warning: " <> renderStorageError err)
+          logWarning "replay-store" "read_failed"
+            [("reason", renderStorageError err)]
 
 matchSummaryForUpdate :: RoomRuntime -> RoomUpdate -> Maybe MatchSummary
 matchSummaryForUpdate room update =

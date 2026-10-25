@@ -389,13 +389,6 @@ lifeOf pid state =
       | playerId player == wanted = Just player
       | otherwise = findPlayer wanted rest
 
-wolfState :: [(PlayerId, PlayerId)] -> GameState
-wolfState votes =
-  (activeState roles9 Night)
-    { gameNightActions = [(actor, WolfTarget target) | (actor, target) <- votes]
-    , gameWolfVotingClosed = True
-    }
-
 isRejected :: Either GameError [DomainEvent] -> Bool
 isRejected (Left _) = True
 isRejected (Right _) = False

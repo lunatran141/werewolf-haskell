@@ -2,7 +2,7 @@
 
 module Main (main) where
 
-import Control.Exception (SomeException, catch, displayException)
+import Control.Exception (SomeException, catch)
 import Network.HTTP.Types (status200)
 import Network.Wai (Application, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (run)
@@ -19,10 +19,10 @@ import Server.AnalyticsClient
   )
 import Server.ReplayStore (ReplayStore, newReplayStore)
 import Server.Room (RoomRegistry, RoomRuntime(..), newRoomRegistry)
+import Server.SafeLog (logError, logInfo)
 import Server.Supervisor (Supervisor, forkSupervised, newSupervisor)
 import Server.WebSocket (webSocketApp)
 import System.Environment (lookupEnv)
-import System.IO (hPutStrLn, stderr)
 import Text.Read (readMaybe)
 
 main :: IO ()
@@ -36,7 +36,7 @@ main = do
   _ <- forkSupervised supervisor "analytics-publisher" $
     runAnalyticsPublisher analyticsPublisher
 
-  putStrLn ("werewolf-server listening on port " <> show port)
+  logInfo "game-server" "server_listening" [("port", show port)]
   run port
     (app registry
       (startRoomWorker supervisor analyticsPublisher replayStore))
@@ -58,9 +58,9 @@ startRoomWorker supervisor analyticsPublisher replayStore room = do
   _ <- forkSupervised supervisor ("analytics-room-" ++ roomId room)
     analyticsForwarder
   _ <- forkSupervised supervisor ("game-loop-" ++ roomId room) $
-    runLobbyLoop room `catch` \(err :: SomeException) ->
-      hPutStrLn stderr
-        ("GameLoop " ++ roomId room ++ " stopped with error: " ++ displayException err)
+    runLobbyLoop room `catch` \(_ :: SomeException) ->
+      logError "game-server" "game_loop_stopped"
+        [("roomId", roomId room), ("errorClass", "unexpected_exception")]
   pure ()
 
 app :: RoomRegistry -> (RoomRuntime -> IO ()) -> Application
