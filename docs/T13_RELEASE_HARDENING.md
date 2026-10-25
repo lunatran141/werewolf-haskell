@@ -27,7 +27,7 @@ repeatable release candidate with explicit safety gates.
 
 ```powershell
 cabal build all --enable-tests --ghc-options=-Werror
-cabal test all --enable-tests --test-show-details=direct
+cabal --project-file=cabal.project.coverage test all --enable-tests --test-show-details=direct
 cabal test all --enable-tests --test-show-details=direct
 node --check web/app.js
 node --test test/T06UiSpec.cjs test/T07UiSpec.cjs test/T13UiSecuritySpec.cjs

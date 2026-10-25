@@ -30,7 +30,7 @@ jobs:
       - name: Build all components
         run: cabal build all --enable-tests --ghc-options=-Werror
       - name: Run all tests with coverage
-        run: cabal test all --enable-tests --enable-coverage --test-show-details=direct
+        run: cabal --project-file=cabal.project.coverage test all --enable-tests --test-show-details=direct
       - name: Repeat full suite to catch flaky tests
         run: cabal test all --enable-tests --test-show-details=direct
       - name: Set up Node.js for browser UI tests

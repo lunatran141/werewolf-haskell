@@ -1,0 +1,7 @@
+packages: .
+
+-- Keep coverage scoped to this project package. Passing --enable-coverage on
+-- Cabal 3.10 also applies it to external dependencies; vector-0.13 then cannot
+-- use its required per-component build.
+package werewolf-server
+  coverage: True
