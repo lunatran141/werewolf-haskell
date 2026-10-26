@@ -4,6 +4,16 @@ Game Ma Sói chạy trên trình duyệt, với Haskell Server quản lý luật
 
 Dự án hỗ trợ ván **8 hoặc 9 người**; cấu hình 9 người là kịch bản demo chính. Game có Lobby, Ready, phân vai, hành động ban đêm, thảo luận và chat ban ngày, bỏ phiếu, kỹ năng Thợ Săn, điều kiện thắng và công khai vai khi kết thúc. Người chơi có thể kết nối lại để tiếp tục ván đang chạy. Luật chi tiết nằm trong [đặc tả T01](docs/T01-game-rules.md).
 
+## Chơi trực tuyến
+
+**Mở game tại [werewolf-haskell.onrender.com](https://werewolf-haskell.onrender.com/).** Người chơi chỉ cần trình duyệt; không cần cài Haskell hay Docker để tham gia bản web.
+
+1. Một người tạo phòng và chia sẻ mã phòng cho những người còn lại.
+2. Mỗi người nhập tên, tham gia phòng và chọn **Sẵn sàng**.
+3. Khi phòng đủ 8 hoặc 9 người và tất cả đã sẵn sàng, Host bắt đầu ván.
+
+Nếu trang chưa tải ngay, hãy chờ dịch vụ khởi động rồi tải lại. Trạng thái ván đang chơi được giữ trong bộ nhớ Server, nên ván sẽ không được khôi phục nếu dịch vụ khởi động lại.
+
 ## Chạy game bằng Docker
 
 Cần Docker Desktop đang hoạt động. Từ thư mục gốc của repository:
