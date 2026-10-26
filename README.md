@@ -20,7 +20,7 @@ Mở <http://127.0.0.1:8080> để chơi. Endpoint `/health` trả về `{"statu
 docker compose down
 ```
 
-Compose dùng cổng `8080` mặc định. Có thể sao chép `.env.example` thành `.env` rồi thay `APP_PORT` nếu cổng này đã được sử dụng. Không commit `.env` hoặc thông tin bí mật. Hướng dẫn kiểm tra từ bản clone sạch nằm trong [tài liệu Docker và CI](docs/s03-docker-ci.md).
+Compose và giao diện local đang dùng cổng `8080`. Không commit `.env` hoặc thông tin bí mật. Hướng dẫn kiểm tra từ bản clone sạch nằm trong [tài liệu Docker và CI](docs/s03-docker-ci.md).
 
 ## Chạy bằng GHC/Cabal
 
@@ -56,6 +56,21 @@ Sau đó mở <http://127.0.0.1:8080>. Mặc định Worker nghe TCP cổng `909
 
 NFS là **profile demo tùy chọn**. Cấu hình Docker và bản triển khai thông thường không cần NFS. Replay X03 là `MatchSummary`, không phải toàn bộ `GameState` hay lịch sử chat; NFS không lưu và không đồng bộ trạng thái game đang diễn ra.
 
+Để thử NFS bằng Docker trên máy hỗ trợ NFSv4, khởi động NFS Server trước, sau đó chạy Game Server và Worker với profile demo:
+
+```powershell
+docker compose -f compose.yaml -f docker-compose.nfs.yml --profile nfs-demo up -d nfs-server
+docker compose -f compose.yaml -f docker-compose.nfs.yml --profile nfs-demo up --build server analytics-worker
+```
+
+Nhấn `Ctrl+C` để dừng lệnh thứ hai, rồi chạy `docker compose -f compose.yaml -f docker-compose.nfs.yml --profile nfs-demo down`. Nếu Docker daemon không kết nối được NFS qua `127.0.0.1`, xem cách đặt `NFS_HOST` và kiểm tra dữ liệu trong [hướng dẫn X03](docs/X03_NFS_REPLAY.md).
+
+## Triển khai trên Render
+
+Tạo **Web Service** từ repository với Docker runtime và `Dockerfile` ở thư mục gốc. Cấu hình `PORT=8080` và `APP_PORT=8080` để cổng Render mong đợi khớp với cổng Haskell Server đang nghe; đặt HTTP health check path là `/health`. Server phục vụ cả trang web và WebSocket `/ws` trên cùng một cổng. Khi mở trang bằng HTTPS, client dùng `wss://` cùng hostname.
+
+Dockerfile mặc định chỉ khởi động Game Server. Muốn lưu analytics trên Render thì cần một dịch vụ Worker riêng có kết nối nội bộ và nơi lưu dữ liệu phù hợp; còn bản demo NFS là cấu hình Docker local, không dùng trong Web Service này. Xem [hướng dẫn Docker của Render](https://render.com/docs/docker), [cấu hình cổng](https://render.com/docs/web-services#port-binding) và [WebSocket](https://render.com/docs/websocket). Sau khi deploy, kiểm tra `https://<ten-dich-vu>.onrender.com/health` và chơi thử trên 2–3 trình duyệt; lưu kết quả vào [checklist T12](docs/T12-full-game-e2e.md).
+
 ## Kiểm thử và CI
 
 ```powershell
@@ -89,7 +104,7 @@ Xem [kiến trúc và luồng `JoinGame`](docs/s04-architecture.md), [protocol T
 - `GameState` của phòng đang nằm trong bộ nhớ Server. Kết nối lại được hỗ trợ khi Server còn chạy; khởi động lại Server không khôi phục ván đang diễn ra.
 - X02 và X03 chỉ lưu dữ liệu tổng hợp đã lọc. Chúng không thay thế database lưu ván hoặc trạng thái phòng.
 - Bài test T12 đã tự động hóa ván 9 người. [Checklist T12](docs/T12-full-game-e2e.md) vẫn cần ảnh/video 2–3 trình duyệt thật và kết quả kiểm tra môi trường triển khai.
-- Báo cáo, slide, video demo và release cuối (T14–T15) cần được hoàn thiện trước khi nộp. Chỉ cập nhật mục này khi đã có liên kết minh chứng tương ứng.
+- Liên kết báo cáo, slide, video demo và release cuối (T14–T15) cần được bổ sung vào README khi các tài liệu đó được công bố. Tài liệu có thể được lưu ngoài repository.
 
 ## Đóng góp
 
