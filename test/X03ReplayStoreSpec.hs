@@ -2,21 +2,45 @@
 
 module Main (main) where
 
+import Control.Concurrent (forkIO, killThread, threadDelay)
+import Control.Concurrent.STM (atomically, writeTChan)
 import Control.Exception (bracket)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Char8 as BSC
+import qualified Data.ByteString.Lazy.Char8 as BL8
 import Data.Char (toLower)
-import Domain.Types (GameResult(..), Team(..))
+import Domain.Types
+  ( DomainEvent(GameFinished)
+  , GameResult(..)
+  , GameState(..)
+  , LifeStatus(Alive)
+  , Player(..)
+  , Team(..)
+  , defaultAppearance
+  , emptyLobby
+  )
 import Protocol.Analytics (MatchSummary(..))
+import Server.AnalyticsClient
+  ( newAnalyticsPublisher
+  , publishMatchSummary
+  , subscribeRoomAnalyticsWithReplay
+  )
 import Server.ReplayStore
   ( ReplayWriteResult(..)
   , StorageError(..)
   , newReplayStore
   , readReplay
+  , renderStorageError
   , replayFilePath
   , storageErrorFromIOException
   , writeReplay
   )
+import Server.Room
+  ( RoomRuntime(..)
+  , RoomUpdate(..)
+  , newRoomRuntime
+  )
+import Server.SafeLog (LogLevel(Warning), encodeSafeLogLine)
 import System.Directory
   ( createDirectory
   , getTemporaryDirectory
@@ -125,6 +149,57 @@ main = hspec $ do
               , "target"
               , "nightaction"
               ]
+
+    it "loi mount NFS trong luc game van tiep tuc chay khong lam dung RoomRuntime va van day MatchSummary" $
+      withTempDirectory $ \directory -> do
+        let brokenMount = directory </> "broken-nfs-mount"
+        BS.writeFile brokenMount "occupied-by-file"
+        let brokenStore = newReplayStore brokenMount
+        room <- newRoomRuntime "ROOM-NFS-ERR"
+        publisher <- newAnalyticsPublisher "127.0.0.1" "1"
+        let player = Player "p1" "Player 1" Nothing False Alive defaultAppearance
+            state = emptyLobby {gameDay = 2, gamePlayers = [player], gameHost = "p1"}
+            update = RoomUpdate
+              { updateVersion = 9
+              , updateState = state
+              , updateEvents = [GameFinished (Winner Wolves)]
+              , updateChatRecord = Nothing
+              }
+        forwarder <- subscribeRoomAnalyticsWithReplay (Just brokenStore) publisher room
+        bracket (forkIO forwarder) killThread $ \_ -> do
+          atomically (writeTChan (roomUpdates room) update)
+          threadDelay 50000
+          -- Subscriber khong bi crash va publisher van tiep tuc nhan them summary moi
+          let followUp = sampleReplay { matchId = "match-X03-002" }
+          publishMatchSummary publisher followUp `shouldReturn` True
+
+    it "log loi StorageError va SafeLog khong lo role, ten, chat hoac night target" $ do
+      let errs =
+            [ StorageUnavailable "shared/replays/m1.json" "mount disconnected"
+            , StoragePermissionDenied "shared/replays/m1.json"
+            , StorageCorrupt "shared/replays/m1.json" "invalid json"
+            , StorageConflict "shared/replays/m1.json"
+            , StorageInvalidMatchId "../Werewolf"
+            ]
+          renderedLogs =
+            [ BSC.map toLower $ BL8.toStrict $
+                encodeSafeLogLine Warning "replay-store" "write_failed"
+                  [ ("reason", renderStorageError err)
+                  , ("secretRole", "Werewolf")
+                  , ("wolfChat", "attack p2")
+                  ]
+            | err <- errs
+            ]
+      forM_ renderedLogs $ \bytes ->
+        mapM_ (assertSecretAbsent bytes)
+          [ "werewolf"
+          , "seer"
+          , "attack p2"
+          , "displayname"
+          , "nightaction"
+          ]
+  where
+    forM_ = flip mapM_
 
 isCreated :: Either StorageError ReplayWriteResult -> Bool
 isCreated (Right (ReplayCreated _)) = True

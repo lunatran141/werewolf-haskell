@@ -14,7 +14,8 @@ RUN cabal build all --enable-tests \
     && cabal test all --enable-tests --test-show-details=direct \
     && mkdir -p /out \
     && cp "$(cabal list-bin exe:werewolf-server)" /out/werewolf-server \
-    && cp "$(cabal list-bin exe:analytics-worker)" /out/analytics-worker
+    && cp "$(cabal list-bin exe:analytics-worker)" /out/analytics-worker \
+    && cp "$(cabal list-bin exe:werewolf-simulate)" /out/werewolf-simulate
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update \
@@ -24,6 +25,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY --from=build /out/werewolf-server /usr/local/bin/werewolf-server
 COPY --from=build /out/analytics-worker /usr/local/bin/analytics-worker
+COPY --from=build /out/werewolf-simulate /usr/local/bin/werewolf-simulate
 COPY web ./web
 USER app
 ENV APP_PORT=8080
