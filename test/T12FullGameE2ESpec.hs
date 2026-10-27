@@ -5,17 +5,25 @@ module Main (main) where
 
 import Control.Concurrent (forkIO, killThread, threadDelay)
 import Control.Concurrent.MVar (modifyMVar_, newMVar, readMVar)
-import Control.Concurrent.STM (readTVarIO)
+import Control.Concurrent.STM (atomically, readTVarIO)
 import Control.Exception (bracket)
 import Control.Monad (foldM, forM, forM_, void)
 import Data.Aeson (eitherDecode, encode)
 import qualified Data.ByteString.Lazy as BL
 import Data.List (find, sort)
 import qualified Network.WebSockets as WS
+import System.Directory
+  ( createDirectory
+  , getTemporaryDirectory
+  , removeFile
+  , removePathForcibly
+  )
 import System.IO
   ( BufferMode(LineBuffering)
+  , hClose
   , hSetBuffering
   , hSetEncoding
+  , openBinaryTempFile
   , stderr
   , stdout
   , utf8
@@ -31,8 +39,27 @@ import Domain.Engine
   )
 import Domain.Types
 import Domain.Validation (validateGameInvariant)
+import Protocol.Analytics (MatchSummary(..))
 import Protocol.Types
-import Server.GameLoop (runGameLoopWithPhaseTimeouts)
+import Server.AnalyticsClient
+  ( newAnalyticsPublisher
+  , subscribeRoomAnalyticsWithReplay
+  )
+import Server.Broadcast (chatHistorySnapshot)
+import Server.Connection
+  ( enqueueOutbound
+  , newOutboundQueueWithCapacity
+  , readOutboundRecoverable
+  )
+import Server.GameLoop
+  ( createRoomWithHostAppearance
+  , runGameLoopWithPhaseTimeouts
+  , trySubmitCommand
+  )
+import Server.ReplayStore
+  ( newReplayStore
+  , readReplay
+  )
 import Server.Room
 import Server.WebSocket (webSocketApp)
 
@@ -228,7 +255,7 @@ main = do
         workerIds <- readMVar workers
         forM_ (server : workerIds) (\thread -> void (forkIO (killThread thread)))
 
-  bracket startServer stopServer $ \_ -> hspec $ do
+  hspec $ do
     describe "T12 - deterministic full-game replay" $ do
       it "cung Lobby va input cho cung GameOver va event transcript" $ do
         let first = runPureFullGame
@@ -243,9 +270,111 @@ main = do
             validateGameInvariant (pureFinalState result) `shouldBe` Right ()
             pureEvents result `shouldSatisfy` any isFullReveal
 
+    describe "T12 - 9 nguoi qua RoomRuntime (Hunter, Slow Client, Privacy, Analytics/ReplayStore)" $ do
+      it "Dan reconnect khong nhan WolvesNight, Tho San ban tra, client cham day OutboundQueue va MatchSummary den Analytics/ReplayStore" $
+        withTempReplayDir $ \replayDir -> do
+          created <- createRoomWithHostAppearance
+            registry
+            "T12-RUNTIME-9P"
+            "join-1"
+            "p1"
+            "Nguoi 1"
+            (appearanceFor 1)
+            (const (pure ()))
+          room <- case created of
+            Right (r, _) -> pure r
+            Left err -> fail ("T12 createRoom failed: " ++ show err)
+          publisher <- newAnalyticsPublisher "127.0.0.1" "1"
+          let replayStore = newReplayStore replayDir
+          forwarder <- subscribeRoomAnalyticsWithReplay (Just replayStore) publisher room
+          loopThread <- forkIO (runGameLoopWithPhaseTimeouts 120000000 120000000 120000000 room)
+          forwarderThread <- forkIO forwarder
+          let cleanupThreads = do
+                killThread forwarderThread
+                killThread loopThread
+              submit reqId actor cmd = do
+                res <- trySubmitCommand room reqId actor cmd
+                case res of
+                  Just (Right st) -> pure st
+                  other -> fail ("T12 runtime command failed: " ++ reqId ++ " -> " ++ show other)
+
+          bracket (pure ()) (const cleanupThreads) $ \_ -> do
+            -- 1. Host (p1) Ready va p2..p9 Join & Ready
+            _ <- submit "ready-1" "p1" (SetReady "p1" True)
+            forM_ [2 :: Int .. 9] $ \n -> do
+              let pid = "p" ++ show n
+              _ <- submit ("join-" ++ show n) pid
+                (JoinWithAppearance pid ("Nguoi " ++ show n) (appearanceFor n))
+              _ <- submit ("ready-" ++ show n) pid (SetReady pid True)
+              pure ()
+
+            -- 2. StartGame voi 9 vai (p1..p3: Werewolf, p4: Seer, p5: Guard, p6: Witch, p7: Hunter, p8..p9: Villager)
+            _ <- submit "start-9p" "p1" (StartGame "p1" roles9)
+
+            -- 3. Mo phong client cham (p9) khong doc OutboundQueue lam day queue nhung khong chan phong
+            slowOutbound <- newOutboundQueueWithCapacity 2
+            o1 <- atomically (enqueueOutbound slowOutbound (MsgRoomVersion "T12-RUNTIME-9P" 1))
+            o2 <- atomically (enqueueOutbound slowOutbound (MsgRoomVersion "T12-RUNTIME-9P" 2))
+            o3 <- atomically (enqueueOutbound slowOutbound (MsgRoomVersion "T12-RUNTIME-9P" 3))
+            [o1, o2, o3] `shouldBe` [True, True, False]
+            atomically (readOutboundRecoverable slowOutbound) `shouldReturn` Nothing
+
+            -- 4. Soi chat rieng trong Night 1 va can Tho San (p7)
+            _ <- submit "wolf-chat-n1" "p1"
+              (ChatInChannel "p1" WolvesNight "T12 secret wolf plan")
+            _ <- submit "seer-n1" "p4" (NightAction "p4" (SeerTarget "p1"))
+            _ <- submit "guard-n1" "p5" (NightAction "p5" (GuardTarget "p5"))
+            _ <- submit "wolf1-n1" "p1" (NightAction "p1" (WolfTarget "p7"))
+            _ <- submit "wolf2-n1" "p2" (NightAction "p2" (WolfTarget "p7"))
+            _ <- submit "wolf3-n1" "p3" (NightAction "p3" (WolfTarget "p7"))
+            stAfterWitch <- submit "witch-n1" "p6" (NightAction "p6" WitchPass)
+
+            -- 5. Tho San (p7) bi can chet, kich hoat Hunter pending va ban tra p8
+            gamePendingHunter stAfterWitch `shouldBe` Just "p7"
+            dayOneSt <- submit "hunter-shot-n1" "p7" (ResolveHunter "p7" (Just "p8"))
+            gamePhase dayOneSt `shouldBe` Day
+            gameDay dayOneSt `shouldBe` 1
+
+            -- 6. Chat cong khai Day 1 va kiem tra Dan (p9) reconnect khong nhan WolvesNight
+            _ <- submit "day1-public" "p9"
+              (ChatInChannel "p9" PublicDay "T12 Day 1 villager chat")
+            historyRecords <- readTVarIO (roomChatHistory room)
+            let villagerSnapshot = chatHistorySnapshot "T12-RUNTIME-9P" "p9" dayOneSt historyRecords
+            case villagerSnapshot of
+              MsgChatHistorySnapshot _ records -> do
+                records `shouldSatisfy` all ((/= WolvesNight) . chatChannel)
+                records `shouldSatisfy` all ((/= "T12 secret wolf plan") . chatText)
+                records `shouldSatisfy` any ((== "T12 Day 1 villager chat") . chatText)
+                records `shouldSatisfy` any ((== "__system__") . chatSenderId)
+              _ -> expectationFailure "T12: expected MsgChatHistorySnapshot"
+
+            -- 7. Tat ca 7 nguoi song (p1..p6, p9) SkipDiscussion -> Voting -> Vote p9 -> GameOver (3 Soi = 3 Dan)
+            let livingDay1 = ["p1", "p2", "p3", "p4", "p5", "p6", "p9"]
+            forM_ livingDay1 $ \pid ->
+              void (submit ("skip-" ++ pid) pid (SkipDiscussion pid))
+            forM_ ["p1", "p2", "p3", "p4", "p5", "p6"] $ \pid ->
+              void (submit ("vote-" ++ pid) pid (Vote pid "p9"))
+            finalSt <- submit "vote-p9" "p9" (Vote "p9" "p1")
+
+            gamePhase finalSt `shouldBe` GameOver
+            gameResult finalSt `shouldBe` Just (Winner Wolves)
+
+            -- 8. Xac nhan MatchSummary da duoc ghi sang ReplayStore / Analytics
+            threadDelay 50000
+            let expectedMatchId = roomId room <> "-" <> roomInstanceId room
+            storedReplay <- readReplay replayStore expectedMatchId
+            storedReplay `shouldBe` Right MatchSummary
+              { matchId = expectedMatchId
+              , matchRoomId = "T12-RUNTIME-9P"
+              , matchResult = Winner Wolves
+              , matchDayCount = 1
+              , matchPlayerCount = 9
+              }
+
     describe "T12 - 9 WebSocket clients" $ do
       it "Create/Join -> role -> chat/reconnect -> Vote -> GameOver" $
-        withNineClients $ \clients -> do
+        bracket startServer stopServer $ \_ ->
+          withNineClients $ \clients -> do
           putStrLn "[T12] all 9 clients connected"
           room <- findRoom registry roomCode >>= maybe (fail "T12: thieu RoomRuntime") pure
           lobbyState <- readTVarIO (roomState room)
@@ -406,6 +535,8 @@ main = do
               MsgChatHistorySnapshot _ records -> do
                 length (filter ((== "T12 Day 1 message") . chatText) records) `shouldBe` 1
                 records `shouldSatisfy` any ((== "__system__") . chatSenderId)
+                records `shouldSatisfy` all ((/= WolvesNight) . chatChannel)
+                records `shouldSatisfy` all ((/= "T12 wolf private") . chatText)
               _ -> expectationFailure "T12: thieu chat history"
           putStrLn "[T12] reconnect restored Night 2 and Day 1 history"
 
@@ -458,3 +589,15 @@ isFullReveal _ = False
 isFullRevealMessage :: ServerMessage -> Bool
 isFullRevealMessage MsgGameRolesRevealed {} = True
 isFullRevealMessage _ = False
+
+withTempReplayDir :: (FilePath -> IO a) -> IO a
+withTempReplayDir action =
+  bracket create removePathForcibly action
+  where
+    create = do
+      base <- getTemporaryDirectory
+      (path, handle) <- openBinaryTempFile base "t12-replay-dir"
+      hClose handle
+      removeFile path
+      createDirectory path
+      pure path

@@ -12,9 +12,10 @@ Test `T12FullGameE2ESpec.hs` kiểm tra:
 - Day 1 lưu chat và cùng `requestId` không tạo tin thứ hai.
 - Toàn bộ người sống bỏ qua thảo luận; khi người sống cuối cùng bỏ phiếu,
   Server chốt ngay và chuyển thật sang Night 2 mà không chờ hết 60 giây.
-- Reconnect bằng token giữ PlayerId, Night 2 và lịch sử Day 1.
+- Reconnect bằng token giữ PlayerId, Night 2 và lịch sử Day 1 (đồng thời xác nhận Dân reconnect không nhận tin nhắn kênh `WolvesNight`).
 - Night 2 được thực hiện bằng WebSocket và tự kết thúc tại GameOver.
-- Một client không đọc tiếp dữ liệu không chặn các client còn lại.
+- Một client không đọc tiếp dữ liệu (làm đầy `OutboundQueue`) không chặn các client còn lại.
+- Kịch bản tích hợp 9 người qua `RoomRuntime` xác nhận liền mạch: Thợ Săn bị cắn và bắn trả (`ResolveHunter`), lọc lịch sử chat riêng tư cho Dân, xử lý tràn `OutboundQueue` của client chậm, và xuất `MatchSummary` sang `ReplayStore` / `AnalyticsPublisher` khi `GameOver`.
 - GameOver công khai đủ 9 vai.
 - Pure replay cùng input tạo cùng final state và event transcript.
 
@@ -41,7 +42,7 @@ cabal test --enable-tests t12-full-game-e2e-test
 
 | Bằng chứng | Trạng thái | Đường dẫn/link |
 | --- | --- | --- |
-| Log test 9 client | Chưa ghi | |
+| Log test 9 client | Đã có bài test tự động | `test/T12FullGameE2ESpec.hs` (`t12-full-game-e2e-test`) |
 | Ảnh Lobby đủ 9 người | Chưa ghi | |
 | Ảnh Night từ góc nhìn Sói và Dân | Chưa ghi | |
 | Ảnh Day/chat/bubble | Chưa ghi | |
