@@ -66,8 +66,8 @@ data RoomRuntime = RoomRuntime
   , roomNextChatSequence :: TVar Int
   -- Token chỉ dùng để nối lại đúng PlayerId sau khi WebSocket bị ngắt.
   , roomReconnectTokens :: TVar [(String, PlayerId)]
-  -- Mốc monotonic của cửa sổ Day/Voting/Hunter để reconnect không reset giờ.
-  , roomPhaseDeadline :: TVar (Maybe (Phase, Int, Word64))
+  -- Mốc monotonic của từng lượt; stage phân biệt Sói và vai Dân trong đêm.
+  , roomPhaseDeadline :: TVar (Maybe (Phase, Int, Maybe String, Word64))
   }
 
 newRoomRuntime :: RoomId -> IO RoomRuntime

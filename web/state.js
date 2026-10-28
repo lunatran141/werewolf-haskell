@@ -21,6 +21,10 @@ const state = {
   nightActionDone: false,
   nightMessage: "",
   seerResult: null,
+  seerTargetName: null,
+  nightStage: null,
+  nightProgress: [],
+  roomClosingDeadlineMs: null,
   wolfVotesSubmitted: 0,
   wolfVotesTotal: 0,
   wolfTargetLocked: false,
@@ -75,6 +79,7 @@ function handlePhaseChanged(phase) {
 
   if (previousPhase === "Voting" && phase !== "Voting") clearVoteClock();
   if (previousPhase === "Day" && phase !== "Day") clearDayClock();
+  if (previousPhase === "Night" && phase !== "Night") clearNightClock();
 
   // Đồng bộ một phase cho cả T05 và T06; xóa kết quả cũ khi bắt đầu Voting mới.
   if (phase === "Voting" && voting.phase !== "Voting") {
@@ -111,6 +116,9 @@ function handlePhaseChanged(phase) {
     state.nightActionDone = false;
     state.nightMessage = "";
     state.seerResult = null;
+    state.seerTargetName = null;
+    state.nightProgress = [];
+    state.nightStage = null;
     state.wolfVotesSubmitted = 0;
     state.wolfVotesTotal = 0;
     state.wolfTargetLocked = false;
@@ -229,6 +237,26 @@ function handleServerMessage(message) {
       if (message.phase === "Day") startDayClock(message.day, message.remainingMs);
       if (message.phase === "Voting" && !voting.resolved) {
         startVoteClock(message.day, message.remainingMs);
+      }
+      if (message.phase === "GameOver") {
+        state.roomClosingDeadlineMs = Date.now() + Math.max(0, message.remainingMs);
+      }
+      break;
+
+    case "NightTimeRemaining":
+      if (message.roomId === state.roomId && state.phase === "Night" &&
+          message.day === voting.day && Number.isFinite(message.remainingMs)) {
+        state.nightStage = message.stage;
+        startNightClock(message.day, message.stage, message.remainingMs);
+      }
+      break;
+
+    case "NightProgress":
+      if (message.roomId === state.roomId && message.day >= voting.day &&
+          state.phase === "Night" && Array.isArray(message.roles)) {
+        state.nightProgress = message.roles.filter(item =>
+          item && typeof item.role === "string" &&
+          Number.isInteger(item.done) && Number.isInteger(item.total));
       }
       break;
 
@@ -391,6 +419,14 @@ function handleServerMessage(message) {
       }
       break;
 
+    case "SeerInspection":
+      if (message.roomId === state.roomId && state.selfRole === "Seer") {
+        state.seerResult = message.team;
+        state.seerTargetName = message.targetName;
+        state.nightMessage = "Đã nhận kết quả soi riêng tư.";
+      }
+      break;
+
     case "WolfVoteUpdated":
       if (message.roomId === state.roomId) {
         state.wolfVotesSubmitted = Number.isInteger(message.submitted)
@@ -484,6 +520,7 @@ function handleServerMessage(message) {
         clearVoteClock();
         state.phase = "GameOver";
         state.gameResult = message.result;
+        state.roomClosingDeadlineMs = Date.now() + 45_000;
         state.pending = null;
 
         state.error = "";

@@ -355,6 +355,15 @@ main = hspec $ do
       eitherDecode (encodeServerMessage message)
         `shouldBe` Right message
 
+    it "E02b - private seer target, night progress and stage clock round-trip" $ do
+      let messages =
+            [ MsgSeerInspection "ROOM-01" "Van" Village
+            , MsgNightProgress "ROOM-01" 2 [("Werewolf", 1, 2), ("Seer", 1, 1)]
+            , MsgNightTimeRemaining "ROOM-01" 2 "Village" 29900
+            ]
+      map (eitherDecode . encodeServerMessage) messages
+        `shouldBe` map Right messages
+
     it "E03 - WitchVictimNotice round-trip" $ do
       let messages =
             [ MsgWitchVictimNotice "ROOM-01" (Just "p7")

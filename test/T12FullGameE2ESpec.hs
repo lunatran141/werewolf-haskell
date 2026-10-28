@@ -310,15 +310,15 @@ main = do
                 void $ receiveUntil (clientConnection client)
                   (== MsgNightActionAccepted roomCode)
 
+          forM_ (zip [1 :: Int ..] wolfClients) $ \(number, wolf) ->
+            submitNight ("night1-wolf-" ++ show number) wolf
+              (WolfTarget (clientPlayerId slowClient))
           submitNight "night1-seer" seerClient
             (SeerTarget (clientPlayerId wolfOne))
           void $ receiveUntil (clientConnection seerClient)
             (== MsgSeerResult roomCode Wolves)
           submitNight "night1-guard" guardClient
             (GuardTarget (clientPlayerId guardClient))
-          forM_ (zip [1 :: Int ..] wolfClients) $ \(number, wolf) ->
-            submitNight ("night1-wolf-" ++ show number) wolf
-              (WolfTarget (clientPlayerId slowClient))
           void $ receiveUntil (clientConnection witchClient)
             (== MsgWitchVictimNotice roomCode (Just (clientPlayerId slowClient)))
           submitNight "night1-witch" witchClient WitchPass
@@ -409,15 +409,15 @@ main = do
               _ -> expectationFailure "T12: thieu chat history"
           putStrLn "[T12] reconnect restored Night 2 and Day 1 history"
 
+          forM_ (zip [1 :: Int ..] wolfClients) $ \(number, wolf) ->
+            submitNight ("night2-wolf-" ++ show number) wolf
+              (WolfTarget (clientPlayerId seerClient))
           submitNight "night2-seer" seerClient
             (SeerTarget (clientPlayerId wolfOne))
           void $ receiveUntil (clientConnection seerClient)
             (== MsgSeerResult roomCode Wolves)
           submitNight "night2-guard" guardClient
             (GuardTarget (clientPlayerId witchClient))
-          forM_ (zip [1 :: Int ..] wolfClients) $ \(number, wolf) ->
-            submitNight ("night2-wolf-" ++ show number) wolf
-              (WolfTarget (clientPlayerId seerClient))
           void $ receiveUntil (clientConnection witchClient)
             (== MsgWitchVictimNotice roomCode (Just (clientPlayerId seerClient)))
           submitNight "night2-witch" witchClient WitchPass

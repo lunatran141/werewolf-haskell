@@ -2,7 +2,8 @@
 
 module Main (main) where
 
-import Control.Exception (SomeException, catch)
+import Control.Concurrent (killThread)
+import Control.Exception (SomeException, catch, finally)
 import Network.HTTP.Types (status200)
 import Network.Wai (Application, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (run)
@@ -10,7 +11,7 @@ import Network.Wai.Handler.WebSockets (websocketsOr)
 import Network.Wai.Application.Static
   (defaultFileServerSettings, staticApp)
 import qualified Network.WebSockets as WS
-import Server.GameLoop (runLobbyLoop)
+import Server.GameLoop (runRegisteredLobbyLoop)
 import Server.AnalyticsClient
   ( AnalyticsPublisher
   , newAnalyticsPublisherFromEnv
@@ -39,7 +40,7 @@ main = do
   logInfo "game-server" "server_listening" [("port", show port)]
   run port
     (app registry
-      (startRoomWorker supervisor analyticsPublisher replayStore))
+      (startRoomWorker registry supervisor analyticsPublisher replayStore))
 
 replayStoreFromDirectory :: Maybe FilePath -> Maybe ReplayStore
 replayStoreFromDirectory (Just path)
@@ -47,20 +48,22 @@ replayStoreFromDirectory (Just path)
 replayStoreFromDirectory _ = Nothing
 
 startRoomWorker
-  :: Supervisor
+  :: RoomRegistry
+  -> Supervisor
   -> AnalyticsPublisher
   -> Maybe ReplayStore
   -> RoomRuntime
   -> IO ()
-startRoomWorker supervisor analyticsPublisher replayStore room = do
+startRoomWorker registry supervisor analyticsPublisher replayStore room = do
   analyticsForwarder <-
     subscribeRoomAnalyticsWithReplay replayStore analyticsPublisher room
-  _ <- forkSupervised supervisor ("analytics-room-" ++ roomId room)
+  analyticsThread <- forkSupervised supervisor ("analytics-room-" ++ roomId room)
     analyticsForwarder
   _ <- forkSupervised supervisor ("game-loop-" ++ roomId room) $
-    runLobbyLoop room `catch` \(_ :: SomeException) ->
+    (runRegisteredLobbyLoop registry room `catch` \(_ :: SomeException) ->
       logError "game-server" "game_loop_stopped"
-        [("roomId", roomId room), ("errorClass", "unexpected_exception")]
+        [("roomId", roomId room), ("errorClass", "unexpected_exception")])
+      `finally` killThread analyticsThread
   pure ()
 
 app :: RoomRegistry -> (RoomRuntime -> IO ()) -> Application

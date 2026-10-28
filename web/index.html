@@ -280,7 +280,7 @@
             <section>
               <h3>2. Các giai đoạn của một vòng</h3>
               <p>Trình tự là <strong>Đêm 1 → Ngày 1 (thảo luận) → Bỏ phiếu 1 → Đêm 2</strong> và tiếp tục như vậy cho đến khi có phe thắng hoặc hòa. Server tự chuyển giai đoạn; người chơi không tự chuyển lượt.</p>
-              <p>Trong đêm, người còn sống có kỹ năng chọn hành động hợp lệ. Mỗi người chỉ được gửi một hành động cho vai của mình trong đêm đó; lựa chọn đã được chấp nhận không đổi lại được.</p>
+              <p>Trong đêm, Sói có tối đa <strong>60 giây</strong> để chọn mục tiêu. Sau khi Sói chốt hoặc hết giờ, Tiên Tri, Bảo Vệ và Phù Thủy dùng chung tối đa <strong>30 giây</strong>. Mỗi người chỉ gửi một hành động cho vai của mình; lựa chọn đã được chấp nhận không đổi lại được.</p>
             </section>
             <section>
               <h3>3. Kỹ năng của từng vai</h3>
@@ -344,6 +344,13 @@
             <span id="night-phase" class="player-count">
               NIGHT
             </span>
+          </div>
+
+          <div id="night-clock" class="day-clock" role="timer"
+            aria-label="Thời gian hành động ban đêm còn lại" hidden>
+            <span id="night-clock-label" class="day-clock-label">Đang chờ Server mở lượt</span>
+            <strong id="night-clock-value">01:00</strong>
+            <div class="day-clock-track"><span id="night-clock-bar"></span></div>
           </div>
 
           <div class="night-role-panel">

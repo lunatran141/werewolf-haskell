@@ -13,6 +13,7 @@ module Server.Broadcast
   , privateActionStateMessage
   , validTargetsSnapshot
   , discussionSkipStateMessage
+  , nightProgressSnapshot
   ) where
 
 import Data.Maybe (mapMaybe)
@@ -161,6 +162,25 @@ discussionSkipStateMessage rid actor state =
     submitted = length (gameDiscussionSkips state)
     total = length livingPlayers
     hasSkipped = actor `elem` gameDiscussionSkips state
+
+-- Công khai số lượt hoàn tất theo vai, không gửi PlayerId hoặc mục tiêu.
+nightProgressSnapshot :: RoomId -> GameState -> ServerMessage
+nightProgressSnapshot rid state =
+  MsgNightProgress rid (gameDay state)
+    [ (show role, length [p | p <- active role, submitted (playerId p)], expected role)
+    | role <- [Werewolf, Seer, Guard, Witch]
+    , expected role > 0
+    ]
+  where
+    -- Tổng từ bộ vai ban đầu để không công khai vai nào đã chết.
+    expected role = length (filter (== role) (gameConfiguredRoles state))
+    active role =
+      [ player
+      | player <- gamePlayers state
+      , playerLifeStatus player == Alive
+      , playerRole player == Just role
+      ]
+    submitted pid = pid `elem` map fst (gameNightActions state)
 
 -- Lobby
 -- Tao PlayerView chi chua thong tin cong khai.
