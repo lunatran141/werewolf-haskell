@@ -108,6 +108,9 @@ data ServerMessage
   -- T05: Night Server Events.
   | MsgNightActionAccepted RoomId
   | MsgSeerResult RoomId Team
+  | MsgSeerInspection RoomId String Team
+  -- Tiến độ theo vai, không tiết lộ danh tính hay mục tiêu hành động.
+  | MsgNightProgress RoomId Int [(String, Int, Int)]
   | MsgWolfTeam RoomId [String]
   | MsgWolfVoteUpdated RoomId Int Int
   | MsgWolfTargetLocked RoomId (Maybe String)
@@ -141,6 +144,7 @@ data ServerMessage
   | MsgVotingSnapshot RoomId Phase Int [VotingPlayerView] Bool Bool Bool (Maybe GameResult)
   -- Thời gian còn lại do Server cấp; client không tự gia hạn khi reconnect.
   | MsgPhaseTimeRemaining RoomId Phase Int Integer
+  | MsgNightTimeRemaining RoomId Int String Integer
   | MsgDiscussionSkipState RoomId Int Int Bool
   -- Snapshot rieng cho chinh actor; khong dua vao Lobby/Voting snapshot cong khai.
   | MsgPrivateActionState RoomId Bool (Maybe Bool) (Maybe Bool) (Maybe String)
@@ -580,6 +584,21 @@ instance FromJSON ServerMessage where
         team <- parseTeam teamText
         pure (MsgSeerResult roomId team)
 
+      "SeerInspection" -> do
+        roomId <- obj .: "roomId"
+        targetName <- obj .: "targetName"
+        teamText <- obj .: "team"
+        team <- parseTeam teamText
+        pure (MsgSeerInspection roomId targetName team)
+
+      "NightProgress" -> do
+        entries <- obj .: "roles"
+        progress <- mapM
+          (withObject "NightRoleProgress" $ \entry ->
+            (,,) <$> entry .: "role" <*> entry .: "done" <*> entry .: "total")
+          entries
+        MsgNightProgress <$> obj .: "roomId" <*> obj .: "day" <*> pure progress
+
       "WolfTeam" ->
         MsgWolfTeam
           <$> obj .: "roomId"
@@ -690,6 +709,13 @@ instance FromJSON ServerMessage where
           <$> obj .: "roomId"
           <*> pure phase
           <*> obj .: "day"
+          <*> obj .: "remainingMs"
+
+      "NightTimeRemaining" ->
+        MsgNightTimeRemaining
+          <$> obj .: "roomId"
+          <*> obj .: "day"
+          <*> obj .: "stage"
           <*> obj .: "remainingMs"
 
       "DiscussionSkipState" ->
@@ -860,6 +886,25 @@ instance ToJSON ServerMessage where
           , "team" .= show team
           ]
 
+      MsgSeerInspection roomId targetName team ->
+        object
+          [ "type" .= ("SeerInspection" :: String)
+          , "roomId" .= roomId
+          , "targetName" .= targetName
+          , "team" .= show team
+          ]
+
+      MsgNightProgress roomId day progress ->
+        object
+          [ "type" .= ("NightProgress" :: String)
+          , "roomId" .= roomId
+          , "day" .= day
+          , "roles" .=
+              [ object ["role" .= role, "done" .= done, "total" .= total]
+              | (role, done, total) <- progress
+              ]
+          ]
+
       MsgWolfTeam roomId playerIds ->
         object
           [ "type" .= ("WolfTeam" :: String)
@@ -997,6 +1042,15 @@ instance ToJSON ServerMessage where
           , "roomId" .= roomId
           , "phase" .= show phase
           , "day" .= day
+          , "remainingMs" .= remainingMs
+          ]
+
+      MsgNightTimeRemaining roomId day stage remainingMs ->
+        object
+          [ "type" .= ("NightTimeRemaining" :: String)
+          , "roomId" .= roomId
+          , "day" .= day
+          , "stage" .= stage
           , "remainingMs" .= remainingMs
           ]
 

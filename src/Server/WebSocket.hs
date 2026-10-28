@@ -99,6 +99,7 @@ import Server.Broadcast
   , privateActionStateMessage
   , validTargetsSnapshot
   , discussionSkipStateMessage
+  , nightProgressSnapshot
   )
 
 import Server.Connection
@@ -344,8 +345,10 @@ beginSession room actor sessionRef outbound = do
                 case filter ((== target) . playerId) (gamePlayers state) of
                   targetPlayer : _ ->
                     case playerRole targetPlayer of
-                      Just targetRole -> enqueueSTM
-                        (MsgSeerResult (roomId room) (teamOfRole targetRole))
+                      Just targetRole -> do
+                        enqueueSTM (MsgSeerResult (roomId room) (teamOfRole targetRole))
+                        enqueueSTM (MsgSeerInspection (roomId room)
+                          (playerName targetPlayer) (teamOfRole targetRole))
                       Nothing -> pure ()
                   [] -> pure ()
               [] -> pure ()
@@ -361,6 +364,10 @@ beginSession room actor sessionRef outbound = do
       then do
         enqueueSTM (votingSnapshot (roomId room) actor state)
         enqueueSTM (validTargetsSnapshot (roomId room) actor version state)
+      else pure ()
+
+    if gamePhase state == Night && not (gameNightResolved state)
+      then enqueueSTM (nightProgressSnapshot (roomId room) state)
       else pure ()
 
     if gamePhase state == Day
@@ -434,6 +441,11 @@ beginSession room actor sessionRef outbound = do
         (privateActionStateMessage (roomId room) actor (updateState update))
       else pure ()
 
+    if gamePhase (updateState update) == Night && not (gameNightResolved (updateState update))
+      then sendToClient outbound
+        (nightProgressSnapshot (roomId room) (updateState update))
+      else pure ()
+
     -- Tin chat trực tiếp dùng chính record đã commit để ID/sequence khớp snapshot.
     forM_
       (updateChatRecord update >>= chatMessageForState
@@ -465,11 +477,14 @@ sendPhaseTimeRemaining outbound room = do
   phaseDeadline <- readTVarIO (roomPhaseDeadline room)
   case phaseDeadline of
     Nothing -> pure ()
-    Just (phase, day, deadlineNs) -> do
+    Just (phase, day, stage, deadlineNs) -> do
       now <- getMonotonicTimeNSec
       let remainingMs = fromIntegral ((deadlineNs - min deadlineNs now) `div` 1000000)
-      sendToClient outbound
-        (MsgPhaseTimeRemaining (roomId room) phase day remainingMs)
+      case stage of
+        Just nightStage -> sendToClient outbound
+          (MsgNightTimeRemaining (roomId room) day nightStage remainingMs)
+        Nothing -> sendToClient outbound
+          (MsgPhaseTimeRemaining (roomId room) phase day remainingMs)
 
 -- Token ngẫu nhiên không mang thông tin vai trò hay trạng thái ván.
 newSessionToken :: IO String
@@ -530,7 +545,7 @@ createErrorReply requestId rid actor name createError =
 
         "ROOM_ALREADY_EXISTS"
 
-        "Ma phong nay da duoc su dung."
+        "Phòng này đã được tạo. Vui lòng tạo phòng khác."
 
     HostJoinRejected domainError ->
 
@@ -994,11 +1009,19 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
                     (nightActionErrorReply requestId err)
                   sendFreshTargets room actor
 
-                Right _ ->
-
-                  -- NightActionAccepted duoc gui qua DomainEvent.
-
-                  pure ()
+                Right nextState ->
+                  -- Tên mục tiêu và phe chỉ gửi trên kết nối của Tiên Tri.
+                  -- Dùng roster sau lệnh để vẫn đúng khi lệnh cuối khép đêm.
+                  case choice of
+                    SeerTarget target ->
+                      case [p | p <- gamePlayers nextState, playerId p == target] of
+                        targetPlayer : _ ->
+                          case playerRole targetPlayer of
+                            Just role -> sendToClient outbound
+                              (MsgSeerInspection rid (playerName targetPlayer) (teamOfRole role))
+                            Nothing -> pure ()
+                        [] -> pure ()
+                    _ -> pure ()
 
     -- T05/T06: Giữ contract HunterAction của develop, gắn actor từ session.
     -- NightChoice chỉ là payload; Domain ResolveHunter kiểm tra quyền pending.

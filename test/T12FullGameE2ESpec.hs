@@ -322,11 +322,11 @@ main = do
             -- 4. Soi chat rieng trong Night 1 va can Tho San (p7)
             _ <- submit "wolf-chat-n1" "p1"
               (ChatInChannel "p1" WolvesNight "T12 secret wolf plan")
-            _ <- submit "seer-n1" "p4" (NightAction "p4" (SeerTarget "p1"))
-            _ <- submit "guard-n1" "p5" (NightAction "p5" (GuardTarget "p5"))
             _ <- submit "wolf1-n1" "p1" (NightAction "p1" (WolfTarget "p7"))
             _ <- submit "wolf2-n1" "p2" (NightAction "p2" (WolfTarget "p7"))
             _ <- submit "wolf3-n1" "p3" (NightAction "p3" (WolfTarget "p7"))
+            _ <- submit "seer-n1" "p4" (NightAction "p4" (SeerTarget "p1"))
+            _ <- submit "guard-n1" "p5" (NightAction "p5" (GuardTarget "p5"))
             stAfterWitch <- submit "witch-n1" "p6" (NightAction "p6" WitchPass)
 
             -- 5. Tho San (p7) bi can chet, kich hoat Hunter pending va ban tra p8
@@ -439,15 +439,15 @@ main = do
                 void $ receiveUntil (clientConnection client)
                   (== MsgNightActionAccepted roomCode)
 
+          forM_ (zip [1 :: Int ..] wolfClients) $ \(number, wolf) ->
+            submitNight ("night1-wolf-" ++ show number) wolf
+              (WolfTarget (clientPlayerId slowClient))
           submitNight "night1-seer" seerClient
             (SeerTarget (clientPlayerId wolfOne))
           void $ receiveUntil (clientConnection seerClient)
             (== MsgSeerResult roomCode Wolves)
           submitNight "night1-guard" guardClient
             (GuardTarget (clientPlayerId guardClient))
-          forM_ (zip [1 :: Int ..] wolfClients) $ \(number, wolf) ->
-            submitNight ("night1-wolf-" ++ show number) wolf
-              (WolfTarget (clientPlayerId slowClient))
           void $ receiveUntil (clientConnection witchClient)
             (== MsgWitchVictimNotice roomCode (Just (clientPlayerId slowClient)))
           submitNight "night1-witch" witchClient WitchPass
@@ -540,15 +540,15 @@ main = do
               _ -> expectationFailure "T12: thieu chat history"
           putStrLn "[T12] reconnect restored Night 2 and Day 1 history"
 
+          forM_ (zip [1 :: Int ..] wolfClients) $ \(number, wolf) ->
+            submitNight ("night2-wolf-" ++ show number) wolf
+              (WolfTarget (clientPlayerId seerClient))
           submitNight "night2-seer" seerClient
             (SeerTarget (clientPlayerId wolfOne))
           void $ receiveUntil (clientConnection seerClient)
             (== MsgSeerResult roomCode Wolves)
           submitNight "night2-guard" guardClient
             (GuardTarget (clientPlayerId witchClient))
-          forM_ (zip [1 :: Int ..] wolfClients) $ \(number, wolf) ->
-            submitNight ("night2-wolf-" ++ show number) wolf
-              (WolfTarget (clientPlayerId seerClient))
           void $ receiveUntil (clientConnection witchClient)
             (== MsgWitchVictimNotice roomCode (Just (clientPlayerId seerClient)))
           submitNight "night2-witch" witchClient WitchPass

@@ -244,6 +244,8 @@ test('Giữ StartGame và Night UI của T05 sau khi ghép Voting', () => {
   assert.equal(get('night-section').hidden, false);
   assert.equal(get('seer-action-panel').hidden, false);
   assert.equal(get('wolf-action-panel').hidden, true);
+  message({type: 'NightTimeRemaining', roomId: 'R', day: 1,
+    stage: 'Village', remainingMs: 30_000});
   get('seer-target').value = 'p2'; get('seer-target').fire('change');
   get('seer-submit').fire('click');
   assert.equal(connection.sent[1].type, 'NightAction');

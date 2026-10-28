@@ -41,6 +41,10 @@ const el = {
   endGameButton: document.querySelector("#end-game-button"),
   nightSection: document.querySelector("#night-section"),
   nightPhase: document.querySelector("#night-phase"),
+  nightClock: document.querySelector("#night-clock"),
+  nightClockLabel: document.querySelector("#night-clock-label"),
+  nightClockValue: document.querySelector("#night-clock-value"),
+  nightClockBar: document.querySelector("#night-clock-bar"),
   nightRoleName: document.querySelector("#night-role-name"),
   nightRoleDescription: document.querySelector("#night-role-description"),
   wolfPanel: document.querySelector("#wolf-action-panel"),
@@ -386,6 +390,48 @@ function clearDayClock() {
   discussionClock.deadlineMs = null;
 }
 
+let nightClockInterval = null;
+const nightClock = {day: null, stage: null, deadlineMs: null};
+
+function clearNightClock() {
+  if (nightClockInterval !== null) clearInterval(nightClockInterval);
+  nightClockInterval = null;
+  nightClock.day = null;
+  nightClock.stage = null;
+  nightClock.deadlineMs = null;
+}
+
+function renderNightClock() {
+  const visible = state.phase === "Night" && nightClock.deadlineMs !== null;
+  el.nightClock.hidden = !visible;
+  if (!visible) return;
+  const remaining = Math.max(0, nightClock.deadlineMs - Date.now());
+  const seconds = Math.ceil(remaining / 1000);
+  const duration = nightClock.stage === "Wolves" ? 60_000 : 30_000;
+  el.nightClockLabel.textContent = nightClock.stage === "Wolves"
+    ? "Lượt Sói · 60 giây" : "Lượt Tiên Tri, Bảo Vệ và Phù Thủy · 30 giây";
+  el.nightClockValue.textContent =
+    `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  el.nightClockBar.style.setProperty("width", `${Math.min(100, remaining / duration * 100)}%`);
+  el.nightClock.classList.toggle("is-urgent", seconds <= 10);
+}
+
+function startNightClock(day, stage, remainingMs) {
+  nightClock.day = day;
+  nightClock.stage = stage;
+  nightClock.deadlineMs = Date.now() + Math.max(0, remainingMs);
+  if (nightClockInterval === null) {
+    nightClockInterval = setInterval(() => {
+      renderNightClock();
+      if (nightClock.deadlineMs !== null && Date.now() >= nightClock.deadlineMs) {
+        clearInterval(nightClockInterval);
+        nightClockInterval = null;
+      }
+    }, 250);
+  }
+  renderNightClock();
+}
+
 function renderDayClock() {
   const visible = state.phase === "Day" && discussionClock.deadlineMs !== null;
   el.dayClock.hidden = !visible;
@@ -521,6 +567,10 @@ function resetNightState() {
   state.nightActionDone = false;
   state.nightMessage = "";
   state.seerResult = null;
+  state.seerTargetName = null;
+  state.nightStage = null;
+  state.nightProgress = [];
+  state.roomClosingDeadlineMs = null;
   state.wolfVotesSubmitted = 0;
   state.wolfVotesTotal = 0;
   state.wolfTargetLocked = false;
@@ -553,6 +603,7 @@ function resetNightState() {
 function resetRoomState() {
   clearVoteClock();
   clearDayClock();
+  clearNightClock();
   state.roomId = null;
   state.selfPlayerId = null;
   state.hostPlayerId = null;
@@ -697,6 +748,7 @@ function renderNight() {
   const role = state.selfRole;
 
   el.nightPhase.textContent = state.phase;
+  renderNightClock();
 
   el.nightRoleName.textContent = role
     ? roleNames[role] || role
@@ -711,7 +763,10 @@ function renderNight() {
     state.pending === null &&
     role !== null &&
     !state.nightActionDone && getSelfPlayer()?.alive !== false && !state.hunterPending;
-  const witchCanChoose = canAct && state.witchVictimResolved;
+  const roleCanAct = role === "Werewolf"
+    ? state.nightStage === "Wolves"
+    : state.nightStage === "Village";
+  const witchCanChoose = canAct && roleCanAct && state.witchVictimResolved;
 
   el.wolfPanel.hidden = role !== "Werewolf";
   el.seerPanel.hidden = role !== "Seer";
@@ -724,13 +779,13 @@ function renderNight() {
 
   renderNightTargets();
 
-  el.wolfTarget.disabled = !canAct;
-  el.seerTarget.disabled = !canAct;
-  el.guardTarget.disabled = !canAct;
+  el.wolfTarget.disabled = !canAct || !roleCanAct;
+  el.seerTarget.disabled = !canAct || !roleCanAct;
+  el.guardTarget.disabled = !canAct || !roleCanAct;
   el.witchTarget.disabled = !witchCanChoose;
 
   el.wolfSubmit.disabled =
-    !canAct || !el.wolfTarget.value;
+    !canAct || !roleCanAct || !el.wolfTarget.value;
 
   if (state.wolfTargetLocked) {
     el.wolfVoteStatus.textContent = state.wolfLockedTargetId === null
@@ -746,10 +801,10 @@ function renderNight() {
   }
 
   el.seerSubmit.disabled =
-    !canAct || !el.seerTarget.value;
+    !canAct || !roleCanAct || !el.seerTarget.value;
 
   el.guardSubmit.disabled =
-    !canAct || !el.guardTarget.value;
+    !canAct || !roleCanAct || !el.guardTarget.value;
 
   el.witchHeal.disabled =
     !witchCanChoose || !state.witchHealReady || state.witchVictimId === null;
@@ -766,7 +821,7 @@ function renderNight() {
       state.seerResult === "Wolves" ? "Sói" : "Dân Làng";
 
     el.seerResultText.textContent =
-      `Kết quả soi: phe ${teamName}.`;
+      `Kết quả soi: ${state.seerTargetName || "người đã chọn"} thuộc phe ${teamName}.`;
   }
 
   el.witchVictimPanel.hidden = role !== "Witch";
@@ -844,7 +899,7 @@ function renderDay() {
   if (showSeerDayResult) {
     const teamName = state.seerResult === "Wolves" ? "Sói" : "Dân Làng";
     el.seerDayResultText.textContent =
-      `Kết quả lượt soi đêm vừa rồi: người bạn chọn thuộc phe ${teamName}.`;
+      `Kết quả lượt soi đêm vừa rồi: ${state.seerTargetName || "người bạn chọn"} thuộc phe ${teamName}.`;
   }
 
   const isWolf = state.selfRole === "Werewolf";
@@ -888,6 +943,14 @@ function renderDay() {
     ? `Đêm ${currentDay}`
     : `Ngày ${currentDay} bắt đầu`;
   el.chatMessages.appendChild(marker);
+  if (state.phase === "Night" && currentDay === voting.day) {
+    for (const item of state.nightProgress) {
+      const line = document.createElement("p");
+      line.className = "chat-system-message";
+      line.textContent = `${roleNames[item.role] || item.role}: ${item.done}/${item.total} người đã hoàn tất lượt.`;
+      el.chatMessages.appendChild(line);
+    }
+  }
   const visible = state.chatMessages.filter(chat => chat.day === currentDay &&
     chat.channel === state.chatChannel).sort((a, b) => a.sequence - b.sequence);
   for (const chat of visible) {
@@ -903,7 +966,7 @@ function renderDay() {
     line.append(author, document.createTextNode(chat.message));
     el.chatMessages.appendChild(line);
   }
-  if (visible.length === 0) {
+  if (visible.length === 0 && !(state.phase === "Night" && state.nightProgress.length > 0)) {
     const empty = document.createElement("p");
     empty.className = "chat-empty";
     empty.textContent = "Chưa có tin nhắn cho mục này.";
@@ -961,7 +1024,7 @@ function renderResult() {
     ? "Đang rời phòng..."
     : "Rời phòng và quay lại";
   el.returnHomeStatus.textContent =
-    "Bạn có thể tạo phòng mới hoặc tham gia một phòng khác.";
+    "Phòng tự đóng và đưa mọi người về màn hình đầu sau 45 giây. Bạn có thể rời ngay.";
 
   el.revealedRoleList.replaceChildren();
   for (const [playerId, info] of Object.entries(state.revealedRoles)) {

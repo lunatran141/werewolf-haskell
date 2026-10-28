@@ -22,6 +22,13 @@ function sendNightAction(choice) {
     return;
   }
 
+  if (state.selfRole === "Werewolf" ? state.nightStage !== "Wolves" :
+      state.nightStage !== "Village") {
+    state.error = "Chưa đến lượt vai trò của bạn.";
+    render();
+    return;
+  }
+
   if (state.selfRole === "Witch" && !state.witchVictimResolved) {
     state.error = "Phù Thủy phải chờ Server khóa phiếu Sói trước khi hành động.";
     render();

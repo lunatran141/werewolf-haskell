@@ -46,6 +46,7 @@ const serverErrorMessages = {
   ServerTimeout: "Máy chủ xử lý quá lâu. Hãy thử lại yêu cầu này.",
   InvalidAppearance: "Ngoại hình đã chọn không hợp lệ.",
   ROOM_NOT_FOUND: "Không tìm thấy phòng.",
+  ROOM_ALREADY_EXISTS: "Phòng này đã được tạo. Vui lòng tạo phòng khác.",
   NOT_JOINED: "Bạn chưa tham gia phòng.",
   WRONG_ROOM: "Yêu cầu không thuộc phòng hiện tại.",
   ALREADY_JOINED: "Bạn đã ở trong một phòng.",

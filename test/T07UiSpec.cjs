@@ -307,6 +307,8 @@ test('Có thể chọn mục tiêu Night Action trực tiếp bằng ô người
   const {get, message, players} = setup('Seer');
   message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 1,
     players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  message({type: 'NightTimeRemaining', roomId: 'R', day: 1,
+    stage: 'Village', remainingMs: 30_000});
   get('player-list').children[1].fire('click');
   assert.equal(get('seer-target').value, 'p2');
   assert.equal(get('seer-submit').disabled, false);
@@ -358,17 +360,46 @@ test('Kết quả soi vẫn hiện khi Tiên Tri là người cuối cùng và S
   message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 1,
     players, hasVoted: false, canShoot: false, resolved: false, result: null});
 
-  message({type: 'SeerResult', roomId: 'R', team: 'Wolves'});
   message({type: 'PhaseChanged', roomId: 'R', phase: 'Day'});
   message({type: 'VotingSnapshot', roomId: 'R', phase: 'Day', day: 1,
     players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  message({type: 'SeerInspection', roomId: 'R', targetName: 'Hai', team: 'Wolves'});
 
   assert.equal(get('seer-day-result-panel').hidden, false);
-  assert.match(get('seer-day-result-text').textContent, /phe Sói/);
+  assert.match(get('seer-day-result-text').textContent, /Hai thuộc phe Sói/);
 
   message({type: 'PhaseChanged', roomId: 'R', phase: 'Night'});
   assert.equal(get('seer-day-result-panel').hidden, true,
     'Đêm mới phải xóa kết quả soi của đêm trước');
+});
+
+test('Lượt Sói rồi lượt vai Dân có đồng hồ riêng và kết quả soi ghi tên', () => {
+  const {get, message, players} = setup('Seer');
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 1,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  message({type: 'NightTimeRemaining', roomId: 'R', day: 1,
+    stage: 'Wolves', remainingMs: 60_000});
+  assert.equal(get('seer-submit').disabled, true);
+  assert.match(get('night-clock-label').textContent, /Sói/);
+  message({type: 'NightTimeRemaining', roomId: 'R', day: 1,
+    stage: 'Village', remainingMs: 30_000});
+  get('seer-target').value = 'p2'; get('seer-target').fire('change');
+  assert.equal(get('seer-submit').disabled, false);
+  message({type: 'SeerInspection', roomId: 'R', targetName: 'Hai', team: 'Wolves'});
+  assert.match(get('seer-result-text').textContent, /Hai thuộc phe Sói/);
+});
+
+test('Chat đêm cho thấy tiến độ vai mà không lộ tên người thực hiện', () => {
+  const {get, message, players} = setup('Villager');
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 1,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  message({type: 'NightProgress', roomId: 'R', day: 1,
+    roles: [{role: 'Werewolf', done: 1, total: 2},
+      {role: 'Seer', done: 0, total: 1}]});
+  const status = get('chat-messages').children.map(item => item.textContent).join(' ');
+  assert.match(status, /Sói: 1\/2/);
+  assert.match(status, /Tiên Tri: 0\/1/);
+  assert.doesNotMatch(status, /Một|Hai/);
 });
 
 test('Nút bỏ qua thảo luận chờ đủ người sống rồi Server mới mở Voting', () => {
@@ -405,6 +436,8 @@ test('Phù Thủy chờ Sói chốt phiếu rồi mới được cứu, dùng đ
   assert.equal(get('witch-pass').disabled, true);
 
   message({type: 'WitchVictimNotice', roomId: 'R', victimId: 'p2'});
+  message({type: 'NightTimeRemaining', roomId: 'R', day: 1,
+    stage: 'Village', remainingMs: 30_000});
   assert.match(get('witch-victim-text').textContent, /Hai/);
   assert.equal(get('witch-heal').disabled, false);
   assert.equal(get('witch-target').disabled, false);
@@ -474,6 +507,8 @@ test('Mã lỗi kỹ thuật từ Server được hiển thị bằng tiếng Vi
   const {get, message, connection, players} = setup('Werewolf');
   message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 1,
     players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  message({type: 'NightTimeRemaining', roomId: 'R', day: 1,
+    stage: 'Wolves', remainingMs: 60_000});
   get('wolf-target').value = 'p2'; get('wolf-target').fire('change');
   get('wolf-submit').fire('click');
   const requestId = connection.sent[0].requestId;

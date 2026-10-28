@@ -3,8 +3,11 @@
 module Server.GameLoop
   ( processNextLobbyCommand
   , runLobbyLoop
+  , runRegisteredLobbyLoop
+  , runRegisteredLobbyLoopWithExpiryTimeouts
   , runGameLoopWithTimeouts
   , runGameLoopWithPhaseTimeouts
+  , runGameLoopWithExpiryTimeouts
   , applyInternalCommand
   , trySubmitCommand
   , CreateRoomError(..)
@@ -13,6 +16,7 @@ module Server.GameLoop
   ) where
 
 import Control.Concurrent.MVar (modifyMVar)
+import Control.Monad (forM_)
 
 import Control.Concurrent.STM
   ( STM, atomically, check, orElse, registerDelay
@@ -262,6 +266,7 @@ dispatchPlayerCommand state command =
     -- T05: Seer, Guard, Witch.
     -- Sau moi hanh dong, kiem tra co the ket thuc Night chua.
     NightAction _ _ -> do
+      if gameWolfVotingClosed state then Right () else Left InvalidNightAction
       (nextState, actionEvents) <-
         applyNightCommand state command
 
@@ -462,6 +467,24 @@ timelinePayload previousState state events =
 runLobbyLoop :: RoomRuntime -> IO ()
 runLobbyLoop = runGameLoopWithPhaseTimeouts 180000000 60000000 30000000
 
+-- Phòng đã kết thúc được xóa khỏi registry sau khi tất cả phiên được đưa về
+-- màn hình đầu. Kiểm tra identity để không xóa nhầm phòng cùng mã vừa tạo lại.
+runRegisteredLobbyLoop :: RoomRegistry -> RoomRuntime -> IO ()
+runRegisteredLobbyLoop =
+  runRegisteredLobbyLoopWithExpiryTimeouts 180000000 60000000 30000000 45000000
+
+runRegisteredLobbyLoopWithExpiryTimeouts
+  :: Int -> Int -> Int -> Int -> RoomRegistry -> RoomRuntime -> IO ()
+runRegisteredLobbyLoopWithExpiryTimeouts dayMicros voteMicros hunterMicros finishedMicros registry room = do
+  runGameLoopWithExpiryTimeouts dayMicros voteMicros hunterMicros finishedMicros room
+  modifyMVar (registryRooms registry) $ \rooms -> do
+    let remaining =
+          [ entry
+          | entry@(rid, current) <- rooms
+          , rid /= roomId room || roomInstanceId current /= roomInstanceId room
+          ]
+    pure (remaining, ())
+
 -- T06: Điểm nối cho bộ điều phối T04/T05. Không được gọi từ JSON client.
 -- Cập nhật phase và phát sự kiện trong cùng STM với queue người chơi.
 applyInternalCommand :: RoomRuntime -> Command -> STM (Either GameError GameState)
@@ -477,16 +500,68 @@ applyInternalCommand room command = do
       writeTChan (roomUpdates room) (RoomUpdate (version + 1) nextState events storedRecord)
       pure (Right nextState)
 
--- Khóa cửa sổ bằng phase/vòng/Hunter: chat và phiếu mới không gia hạn timer.
-timedWindow :: GameState -> Maybe (Phase, Int, Maybe PlayerId)
+data TimedWindow
+  = HunterWindow Phase Int PlayerId
+  | DayWindow Int
+  | VotingWindow Int
+  | WolfWindow Int
+  | VillageWindow Int
+  | FinishedWindow Int
+  deriving (Eq)
+
+-- Khóa cửa sổ bằng phase/vòng/giai đoạn: lệnh chat không gia hạn timer.
+timedWindow :: GameState -> Maybe TimedWindow
 timedWindow state
   | gamePhase state `elem` [Night, Voting], Just hunter <- gamePendingHunter state =
-      Just (gamePhase state, gameDay state, Just hunter)
+      Just (HunterWindow (gamePhase state) (gameDay state) hunter)
+  | gamePhase state == Night && not (gameNightResolved state) =
+      Just (if gameWolfVotingClosed state
+        then VillageWindow (gameDay state) else WolfWindow (gameDay state))
   | gamePhase state == Day =
-      Just (Day, gameDay state, Nothing)
+      Just (DayWindow (gameDay state))
   | gamePhase state == Voting && not (gameVotingResolved state) =
-      Just (Voting, gameDay state, Nothing)
+      Just (VotingWindow (gameDay state))
+  | gamePhase state == GameOver =
+      Just (FinishedWindow (gameDay state))
   | otherwise = Nothing
+
+windowDetails :: TimedWindow -> (Phase, Int, Maybe String)
+windowDetails window = case window of
+  HunterWindow phase day _ -> (phase, day, Nothing)
+  DayWindow day -> (Day, day, Nothing)
+  VotingWindow day -> (Voting, day, Nothing)
+  WolfWindow day -> (Night, day, Just "Wolves")
+  VillageWindow day -> (Night, day, Just "Village")
+  FinishedWindow day -> (GameOver, day, Nothing)
+
+-- Mọi timer nội bộ đi qua cùng giao dịch state/version/update.
+applyInternalTransition
+  :: RoomRuntime
+  -> (GameState -> Either GameError (GameState, [DomainEvent]))
+  -> STM (Either GameError GameState)
+applyInternalTransition room transition = do
+  state <- readTVar (roomState room)
+  case transition state of
+    Left err -> pure (Left err)
+    Right (nextState, events) -> do
+      version <- readTVar (roomVersion room)
+      storedRecord <- appendAcceptedRecord room state nextState events
+      writeTVar (roomState room) nextState
+      writeTVar (roomVersion room) (version + 1)
+      writeTChan (roomUpdates room) (RoomUpdate (version + 1) nextState events storedRecord)
+      pure (Right nextState)
+
+expireWolfWindow :: GameState -> Either GameError (GameState, [DomainEvent])
+expireWolfWindow state = closeWolfVoting state True
+
+expireVillageWindow :: GameState -> Either GameError (GameState, [DomainEvent])
+expireVillageWindow state = do
+  (resolved, events) <- resolveNightTurn state
+  case gamePendingHunter resolved of
+    Just _ -> Right (resolved, events)
+    Nothing -> do
+      (completed, completionEvents) <- completeNightTurn resolved
+      Right (completed, events ++ completionEvents)
 
 -- Thời gian tính bằng microsecond, truyền vào để test nhanh mà không đổi luật.
 -- Timer và Vote tranh chấp trên cùng TVar: sau khi chốt, phiếu đến muộn bị từ chối.
@@ -495,19 +570,28 @@ runGameLoopWithTimeouts = runGameLoopWithPhaseTimeouts 180000000
 
 -- Day kéo dài 3 phút ở cấu hình thật; test có thể truyền thời hạn ngắn hơn.
 runGameLoopWithPhaseTimeouts :: Int -> Int -> Int -> RoomRuntime -> IO ()
-runGameLoopWithPhaseTimeouts dayMicros voteMicros hunterMicros room = startWindow
+runGameLoopWithPhaseTimeouts dayMicros voteMicros hunterMicros =
+  runGameLoopWithExpiryTimeouts dayMicros voteMicros hunterMicros 45000000
+
+-- Mốc kết thúc tách ra để kiểm thử nhanh mà production luôn dùng 45 giây.
+runGameLoopWithExpiryTimeouts :: Int -> Int -> Int -> Int -> RoomRuntime -> IO ()
+runGameLoopWithExpiryTimeouts dayMicros voteMicros hunterMicros finishedMicros room = startWindow
   where
     startWindow = do
       state <- readTVarIO (roomState room)
       let window = timedWindow state
           duration = case window of
-            Just (_, _, Just _) -> hunterMicros
-            Just (Day, _, Nothing) -> dayMicros
+            Just (HunterWindow _ _ _) -> hunterMicros
+            Just (DayWindow _) -> dayMicros
+            Just (WolfWindow _) -> voteMicros
+            Just (VillageWindow _) -> min voteMicros 30000000
+            Just (FinishedWindow _) -> finishedMicros
             _ -> voteMicros
       now <- getMonotonicTimeNSec
       atomically $ do
-        let deadline = fmap (\(phase, day, _) ->
-              (phase, day, now + fromIntegral (max 1 duration) * 1000)) window
+        let deadline = fmap (\currentWindow ->
+              let (phase, day, stage) = windowDetails currentWindow
+              in (phase, day, stage, now + fromIntegral (max 1 duration) * 1000)) window
         writeTVar (roomPhaseDeadline room) deadline
         -- Phát thêm snapshot sau khi deadline đã được thiết lập. Update không có
         -- event nên không lặp hiệu ứng game và không tăng version.
@@ -526,14 +610,29 @@ runGameLoopWithPhaseTimeouts dayMicros voteMicros hunterMicros room = startWindo
               (do check (window /= Nothing)
                   expired <- readTVar timer
                   check expired
-                  let command = case window of
-                        Just (_, _, Just hunter) -> ResolveHunter hunter Nothing
-                        Just (Day, _, Nothing) -> AdvancePhase
-                        _ -> ResolveVoting
-                  result <- applyInternalCommand room command
-                  case result of
-                    Left _ -> pure True
-                    Right _ -> pure True)
+                  case window of
+                    Just (HunterWindow _ _ hunter) -> do
+                      _ <- applyInternalCommand room (ResolveHunter hunter Nothing)
+                      pure True
+                    Just (DayWindow _) -> do
+                      _ <- applyInternalCommand room AdvancePhase
+                      pure True
+                    Just (VotingWindow _) -> do
+                      _ <- applyInternalCommand room ResolveVoting
+                      pure True
+                    Just (WolfWindow _) -> do
+                      _ <- applyInternalTransition room expireWolfWindow
+                      pure True
+                    Just (VillageWindow _) -> do
+                      _ <- applyInternalTransition room expireVillageWindow
+                      pure True
+                    Just (FinishedWindow _) -> do
+                      players <- gamePlayers <$> readTVar (roomState room)
+                      forM_ players $ \player -> do
+                        _ <- applyInternalCommand room (Leave (playerId player))
+                        pure ()
+                      pure True
+                    Nothing -> pure True)
               `orElse`
               (processPlayerCommand room >> pure False)
             if restart then do
