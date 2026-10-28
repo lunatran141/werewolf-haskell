@@ -322,11 +322,11 @@ main = do
             -- 4. Soi chat rieng trong Night 1 va can Tho San (p7)
             _ <- submit "wolf-chat-n1" "p1"
               (ChatInChannel "p1" WolvesNight "T12 secret wolf plan")
-            _ <- submit "seer-n1" "p4" (NightAction "p4" (SeerTarget "p1"))
-            _ <- submit "guard-n1" "p5" (NightAction "p5" (GuardTarget "p5"))
             _ <- submit "wolf1-n1" "p1" (NightAction "p1" (WolfTarget "p7"))
             _ <- submit "wolf2-n1" "p2" (NightAction "p2" (WolfTarget "p7"))
             _ <- submit "wolf3-n1" "p3" (NightAction "p3" (WolfTarget "p7"))
+            _ <- submit "seer-n1" "p4" (NightAction "p4" (SeerTarget "p1"))
+            _ <- submit "guard-n1" "p5" (NightAction "p5" (GuardTarget "p5"))
             stAfterWitch <- submit "witch-n1" "p6" (NightAction "p6" WitchPass)
 
             -- 5. Tho San (p7) bi can chet, kich hoat Hunter pending va ban tra p8
