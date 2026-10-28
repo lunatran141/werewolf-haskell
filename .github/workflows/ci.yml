@@ -40,7 +40,7 @@ jobs:
       - name: Check and test browser UI
         run: |
           node --check web/app.js
-          node --test test/T06UiSpec.cjs test/T07UiSpec.cjs test/T13UiSecuritySpec.cjs
+          node --test test/T06UiSpec.cjs test/T07UiSpec.cjs test/AtmosphereAudioSpec.cjs test/T13UiSecuritySpec.cjs
 
   docker:
     runs-on: ubuntu-latest

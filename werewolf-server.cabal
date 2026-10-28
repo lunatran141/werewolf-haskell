@@ -99,10 +99,14 @@ test-suite x02-analytics-client-test
   main-is: X02AnalyticsClientSpec.hs
   hs-source-dirs: test
   default-language: GHC2021
-  ghc-options: -Wall -Wcompat
+  ghc-options: -Wall -Wcompat -threaded
   build-depends:
       base >=4.17 && <5
+    , directory >=1.3
+    , filepath >=1.4
     , hspec >=2.10
+    , network >=3.1 && <4
+    , stm >=2.5 && <3
     , werewolf-server
 
 -- X03: ReplayStore tren shared/NFS storage, fault handling va privacy.
@@ -111,13 +115,14 @@ test-suite x03-replay-store-test
   main-is: X03ReplayStoreSpec.hs
   hs-source-dirs: test
   default-language: GHC2021
-  ghc-options: -Wall -Wcompat
+  ghc-options: -Wall -Wcompat -threaded
   build-depends:
       base >=4.17 && <5
     , bytestring >=0.11
     , directory >=1.3
     , filepath >=1.4
     , hspec >=2.10
+    , stm >=2.5 && <3
     , werewolf-server
 
 -- T13: release hardening, input limits, safe structured logs and privacy gates.
@@ -126,12 +131,13 @@ test-suite t13-release-hardening-test
   main-is: T13ReleaseHardeningSpec.hs
   hs-source-dirs: test
   default-language: GHC2021
-  ghc-options: -Wall -Wcompat
+  ghc-options: -Wall -Wcompat -threaded
   build-depends:
       base >=4.17 && <5
     , aeson >=2 && <3
     , bytestring >=0.11
     , hspec >=2.10
+    , QuickCheck >=2.14
     , stm >=2.5 && <3
     , werewolf-server
 
@@ -368,6 +374,8 @@ test-suite t12-full-game-e2e-test
     , hspec >=2.10
     , aeson >=2 && <3
     , bytestring >=0.11
+    , directory >=1.3
+    , filepath >=1.4
     , stm >=2.5 && <3
     , websockets >=0.12 && <0.14
 

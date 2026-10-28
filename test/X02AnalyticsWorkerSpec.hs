@@ -63,3 +63,14 @@ main = hspec $ do
         recordMatchSummary restartedStore summary `shouldReturn` SummaryDuplicate
         content <- BS.readFile path
         length (filter (not . BS.null) (BS.split 10 content)) `shouldBe` 1
+
+    it "JSONL co dong hong sau khi khoi dong lai van khong crash, giu matchId cu va ghi duoc matchId moi" $
+      withTempStore $ \path -> do
+        firstStore <- newAnalyticsStore path
+        recordMatchSummary firstStore summary `shouldReturn` SummaryStored
+        BS.appendFile path "{\"matchId\":\"corrupted-unfinished-line\n"
+        restartedStore <- newAnalyticsStore path
+        recordMatchSummary restartedStore summary `shouldReturn` SummaryDuplicate
+        let nextSummary = summary { matchId = "match-002", matchResult = Winner Village }
+        recordMatchSummary restartedStore nextSummary `shouldReturn` SummaryStored
+        recordMatchSummary restartedStore nextSummary `shouldReturn` SummaryDuplicate
