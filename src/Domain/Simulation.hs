@@ -1,11 +1,20 @@
 {-# LANGUAGE DeriveGeneric #-}
 
--- | X01: Mo phong van choi thuan (Pure Simulation) va danh gia song song
--- bang parMap rdeepseq (Evaluation Strategies).
+-- | X01: Mo phong van choi thuan (Pure Simulation), phan tich tham so CLI
+-- bang Parser Combinator (ReadP) va danh gia song song bang parMap rdeepseq.
 module Domain.Simulation
   ( MatchOutcome(..)
   , BalanceStats(..)
   , SimConfig(..)
+  , SimCliOptions(..)
+  , SimCliCommand(..)
+  , SimCliError(..)
+  , defaultSimCliOptions
+  , parseGamesSpec
+  , parseSeedSpec
+  , parseSimulateArgs
+  , renderSimCliError
+  , simCliUsage
   , roles8Preset
   , roles9Preset
   , simulateOneGame
@@ -16,9 +25,24 @@ module Domain.Simulation
 
 import Control.DeepSeq (NFData)
 import Control.Parallel.Strategies (parMap, rdeepseq)
-import Data.List (foldl')
+import Data.Char (isDigit, isSpace)
+import Data.List (foldl', isPrefixOf)
 import GHC.Generics (Generic)
 import System.Random (StdGen, mkStdGen, randomR)
+import Text.ParserCombinators.ReadP
+  ( ReadP
+  , char
+  , eof
+  , many
+  , munch1
+  , option
+  , pfail
+  , readP_to_S
+  , sepBy1
+  , skipSpaces
+  , (<++)
+  )
+import Text.Read (readMaybe)
 
 import Domain.Engine
   ( applyCommand
@@ -88,6 +112,195 @@ data SimConfig = SimConfig
   } deriving (Eq, Show, Generic)
 
 instance NFData SimConfig
+
+-- | Tuy chon CLI da duoc kiem tra hop le cho executable werewolf-simulate.
+data SimCliOptions = SimCliOptions
+  { simOptGames  :: ![Int]
+  , simOptSeed   :: !Int
+  , simOptOutput :: !FilePath
+  } deriving (Eq, Show, Generic)
+
+instance NFData SimCliOptions
+
+-- | Lenh CLI sau khi parse thanh cong.
+data SimCliCommand
+  = SimCliRun SimCliOptions
+  | SimCliHelp
+  deriving (Eq, Show, Generic)
+
+instance NFData SimCliCommand
+
+-- | Loi phan tich tham so CLI tuong minh (khong dung partial read).
+data SimCliError
+  = SimUnknownFlag String
+  | SimMissingValue String
+  | SimInvalidGames String
+  | SimInvalidSeed String
+  | SimInvalidOutput String
+  deriving (Eq, Show, Generic)
+
+instance NFData SimCliError
+
+-- | Cau hinh CLI mac dinh khi khong truyen tham so.
+defaultSimCliOptions :: SimCliOptions
+defaultSimCliOptions = SimCliOptions
+  { simOptGames  = [1000, 5000]
+  , simOptSeed   = 2026
+  , simOptOutput = "report/balance.csv"
+  }
+
+-- | Chay parser ReadP va lay ket qua khop toan bo chuoi dau vao.
+runReadP :: ReadP a -> String -> Maybe a
+runReadP parser input =
+  case [result | (result, "") <- readP_to_S parser input] of
+    result : _ -> Just result
+    []         -> Nothing
+
+-- | Parser combinator cho mot moc so van: ho tro so nguyen duong (1000),
+-- dau cham phan nhom nghin (1.000, 10.000) va hau to k/K (1k, 5k, 10k).
+-- Gioi han trong khoang [1 .. 1.000.000] de tranh tran bo nho.
+gameCountTokenP :: ReadP Int
+gameCountTokenP = do
+  skipSpaces
+  firstGroup <- munch1 isDigit
+  restGroups <- many (char '.' >> munch1 isDigit)
+  let digits = firstGroup ++ concat restGroups
+  multiplier <- option (1 :: Integer) ((char 'k' <++ char 'K') >> pure 1000)
+  skipSpaces
+  case readMaybe digits :: Maybe Integer of
+    Just n ->
+      let total = n * multiplier
+      in if total >= 1 && total <= 1000000
+           then pure (fromIntegral total)
+           else pfail
+    Nothing -> pfail
+
+-- | Parser combinator cho danh sach cac moc so van phan cach boi dau phay.
+gamesListP :: ReadP [Int]
+gamesListP = do
+  counts <- sepBy1 gameCountTokenP (char ',')
+  skipSpaces
+  eof
+  pure counts
+
+-- | Parser combinator cho seed (so nguyen co dau trong khoang [-10^9 .. 10^9]).
+seedSpecP :: ReadP Int
+seedSpecP = do
+  skipSpaces
+  sign <- option (1 :: Integer) (char '-' >> pure (-1))
+  digits <- munch1 isDigit
+  skipSpaces
+  eof
+  case readMaybe digits :: Maybe Integer of
+    Just n ->
+      let val = sign * n
+      in if val >= -1000000000 && val <= 1000000000
+           then pure (fromIntegral val)
+           else pfail
+    Nothing -> pfail
+
+-- | Phan tich chuoi danh sach so van (vi du "1000,5000,10000" hoac "1k,5k").
+parseGamesSpec :: String -> Either SimCliError [Int]
+parseGamesSpec raw =
+  case runReadP gamesListP raw of
+    Just counts | not (null counts) -> Right counts
+    _ -> Left (SimInvalidGames raw)
+
+-- | Phan tich chuoi seed.
+parseSeedSpec :: String -> Either SimCliError Int
+parseSeedSpec raw =
+  case runReadP seedSpecP raw of
+    Just seed -> Right seed
+    Nothing   -> Left (SimInvalidSeed raw)
+
+-- | Kiem tra duong dan file xuat CSV.
+validateOutputSpec :: String -> Either SimCliError FilePath
+validateOutputSpec raw =
+  let trimmed = dropWhile isSpace raw
+  in if null trimmed || "--" `isPrefixOf` trimmed
+       then Left (SimInvalidOutput raw)
+       else Right raw
+
+-- | Phan tich danh sach tham so dong lenh bang de quy tren danh sach va ReadP.
+-- Tu choi tuong minh co la, thieu gia tri hoac sai dinh dang so.
+parseSimulateArgs :: [String] -> Either SimCliError SimCliCommand
+parseSimulateArgs args
+  | "--help" `elem` args || "-h" `elem` args = Right SimCliHelp
+  | otherwise = SimCliRun <$> go defaultSimCliOptions args
+  where
+    isFlagLike :: String -> Bool
+    isFlagLike s = "--" `isPrefixOf` s
+
+    go :: SimCliOptions -> [String] -> Either SimCliError SimCliOptions
+    go opts [] = Right opts
+    go _ ["--games"] = Left (SimMissingValue "--games")
+    go _ ("--games" : val : _)
+      | isFlagLike val = Left (SimMissingValue "--games")
+    go opts ("--games" : val : rest) = do
+      counts <- parseGamesSpec val
+      go (opts { simOptGames = counts }) rest
+    go _ ["--seed"] = Left (SimMissingValue "--seed")
+    go _ ("--seed" : val : _)
+      | isFlagLike val = Left (SimMissingValue "--seed")
+    go opts ("--seed" : val : rest) = do
+      seed <- parseSeedSpec val
+      go (opts { simOptSeed = seed }) rest
+    go _ ["--output"] = Left (SimMissingValue "--output")
+    go _ ("--output" : val : _)
+      | isFlagLike val = Left (SimMissingValue "--output")
+    go opts ("--output" : val : rest) = do
+      outPath <- validateOutputSpec val
+      go (opts { simOptOutput = outPath }) rest
+    go opts (arg : rest)
+      | "--games=" `isPrefixOf` arg = do
+          let val = drop (length ("--games=" :: String)) arg
+          if null val
+            then Left (SimMissingValue "--games")
+            else do
+              counts <- parseGamesSpec val
+              go (opts { simOptGames = counts }) rest
+      | "--seed=" `isPrefixOf` arg = do
+          let val = drop (length ("--seed=" :: String)) arg
+          if null val
+            then Left (SimMissingValue "--seed")
+            else do
+              seed <- parseSeedSpec val
+              go (opts { simOptSeed = seed }) rest
+      | "--output=" `isPrefixOf` arg = do
+          let val = drop (length ("--output=" :: String)) arg
+          if null val
+            then Left (SimMissingValue "--output")
+            else do
+              outPath <- validateOutputSpec val
+              go (opts { simOptOutput = outPath }) rest
+      | otherwise = Left (SimUnknownFlag arg)
+
+-- | Thong bao loi CLI ro rang cho nguoi dung.
+renderSimCliError :: SimCliError -> String
+renderSimCliError err =
+  case err of
+    SimUnknownFlag flag ->
+      "Loi tham so: Khong nhan dien duoc co hoac tham so '" ++ flag ++ "'."
+    SimMissingValue flag ->
+      "Loi tham so: Co '" ++ flag ++ "' can mot gia tri di kem."
+    SimInvalidGames raw ->
+      "Loi tham so --games: '" ++ raw
+        ++ "' khong hop le (yeu cau danh sach so nguyen 1..1000000, vi du: 1000,5000 hoac 1k,5k,10k)."
+    SimInvalidSeed raw ->
+      "Loi tham so --seed: '" ++ raw
+        ++ "' khong hop le (yeu cau so nguyen trong khoang [-1000000000..1000000000])."
+    SimInvalidOutput raw ->
+      "Loi tham so --output: Duong dan file '" ++ raw ++ "' khong hop le."
+
+-- | Huong dan su dung dong lenh werewolf-simulate.
+simCliUsage :: String
+simCliUsage = unlines
+  [ "Su dung: werewolf-simulate [TUY CHON]"
+  , "  --games <ds>     Danh sach so van mo phong (mac dinh: 1000,5000; ho tro 1k,5k,10k hoac 1.000,5.000)"
+  , "  --seed <so>      Seed khoi tao RNG (mac dinh: 2026)"
+  , "  --output <file>  Duong dan file CSV xuat ket qua (mac dinh: report/balance.csv)"
+  , "  --help, -h       Hien thi huong dan su dung"
+  ]
 
 -- | Preset 8 nguoi: 2 Soi, 1 Tien Tri, 1 Bao Ve, 1 Phu Thuy, 1 Tho San, 2 Dan lang.
 roles8Preset :: [Role]

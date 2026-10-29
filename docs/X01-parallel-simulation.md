@@ -63,34 +63,40 @@ Mỗi ván chơi được mô phỏng hoàn toàn trên tầng Functional Core (
    - **Voting**: Từng người chơi còn sống bỏ phiếu; chốt phiếu bằng `resolveVoting`.
 3. **Kết thúc**: Khi `gamePhase == GameOver`, trích xuất kết quả `GameResult`, kiểm tra bất biến `validateGameInvariant` và trả về `MatchOutcome`.
 
+### 3.4. Phân tích cú pháp tham số CLI an toàn (`ReadP`)
+Hàm `parseSimulateArgs` trong `Domain.Simulation` sử dụng thư viện parser combinator chuẩn `Text.ParserCombinators.ReadP` (`sepBy1`, `munch1`, `char`, `option`, `eof`) để đọc tham số dòng lệnh:
+- Hỗ trợ nhiều dạng nhập: `--games 1000,5000,10000`, `--games=1k,5k,10k`, `--games 1.000,5.000`, `--seed 2026`, `--output report/balance.csv`, `--help`.
+- Kiểm tra miền giá trị hợp lệ và từ chối tường minh mọi cờ lạ hoặc số sai định dạng bằng kiểu `Either SimCliError SimCliCommand`, không dùng hàm partial `read` gây dừng chương trình đột ngột.
+
 ---
 
 ## 4. Kết quả thực nghiệm & Phân tích cân bằng Game
 
-Số liệu thực tế được đo đạc từ lệnh chạy `werewolf-simulate` trên máy **16 CPU Cores** với Seed gốc `2026` (ghi nhận tại `report/balance.csv`):
+Số liệu thực tế được đo đạc từ lệnh chạy `werewolf-simulate --games 1000,5000,10000 --seed 2026 --output report/balance.csv` trên máy **16 CPU Cores** (ghi nhận tại [report/balance.csv](file:///d:/HK5/LTH/LTH_project/werewolf-haskell/report/balance.csv)):
 
 | Cấu hình | Số ván | Seed | Thắng Dân | Thắng Sói | Hòa | Tỷ lệ Dân | Tỷ lệ Sói | Tỷ lệ Hòa | Vòng tb | Tuần tự (ms) | Song song (ms) | Speedup | E19 (Seq == Par) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **8 người (2 Sói)** | 1.000 | 2026 | 267 | 733 | 0 | **26.70%** | **73.30%** | 0.00% | 3.52 | 1.079.4 ms | 263.9 ms | **4.09x** | **PASS (100%)** |
-| **9 người (3 Sói)** | 1.000 | 2026 | 96 | 904 | 0 | **9.60%** | **90.40%** | 0.00% | 3.42 | 1.465.6 ms | 337.4 ms | **4.34x** | **PASS (100%)** |
-| **8 người (2 Sói)** | 5.000 | 2026 | 1.307 | 3.685 | 8 | **26.14%** | **73.70%** | 0.16% | 3.52 | 6.747.6 ms | 1.478.9 ms | **4.56x** | **PASS (100%)** |
-| **9 người (3 Sói)** | 5.000 | 2026 | 480 | 4.518 | 2 | **9.60%** | **90.36%** | 0.04% | 3.41 | 8.138.9 ms | 1.745.3 ms | **4.66x** | **PASS (100%)** |
-| **8 người (2 Sói)** | 10.000 | 2026 | 2.627 | 7.364 | 9 | **26.27%** | **73.64%** | 0.09% | 3.53 | 14.106.2 ms | 5.119.7 ms | **2.76x** | **PASS (100%)** |
-| **9 người (3 Sói)** | 10.000 | 2026 | 1.017 | 8.979 | 4 | **10.17%** | **89.79%** | 0.04% | 3.42 | 15.519.4 ms | 5.557.6 ms | **2.79x** | **PASS (100%)** |
+| **8 người (2 Sói)** | 1.000 | 2026 | 267 | 733 | 0 | **26.70%** | **73.30%** | 0.00% | 3.52 | 1.079.43 ms | 263.91 ms | **4.09x** | **PASS (100%)** |
+| **9 người (3 Sói)** | 1.000 | 2026 | 96 | 904 | 0 | **9.60%** | **90.40%** | 0.00% | 3.42 | 1.465.60 ms | 337.44 ms | **4.34x** | **PASS (100%)** |
+| **8 người (2 Sói)** | 5.000 | 2026 | 1.307 | 3.685 | 8 | **26.14%** | **73.70%** | 0.16% | 3.52 | 6.747.63 ms | 1.478.94 ms | **4.56x** | **PASS (100%)** |
+| **9 người (3 Sói)** | 5.000 | 2026 | 480 | 4.518 | 2 | **9.60%** | **90.36%** | 0.04% | 3.41 | 8.138.88 ms | 1.745.31 ms | **4.66x** | **PASS (100%)** |
+| **8 người (2 Sói)** | 10.000 | 2026 | 2.627 | 7.364 | 9 | **26.27%** | **73.64%** | 0.09% | 3.53 | 14.106.15 ms | 5.119.73 ms | **2.76x** | **PASS (100%)** |
+| **9 người (3 Sói)** | 10.000 | 2026 | 1.017 | 8.979 | 4 | **10.17%** | **89.79%** | 0.04% | 3.42 | 15.519.37 ms | 5.557.56 ms | **2.79x** | **PASS (100%)** |
 
 ### Nhận xét & Đánh giá:
 
-1. **Về mức độ cân bằng (Game Balance)**:
-   - **Ván 8 người (2 Sói / 6 Dân = 25% Sói)**: Phe Dân đạt tỷ lệ thắng **~26.1%**. Với sự hỗ trợ của 4 vai chức năng (Tiên Tri, Bảo Vệ, Phù Thủy, Thợ Săn), phe Dân có cơ hội lật ngược tình thế tốt hơn đáng kể.
-   - **Ván 9 người (3 Sói / 6 Dân = 33.3% Sói)**: Phe Sói chiếm ưu thế áp đảo với tỷ lệ thắng **~90.4%**. Nguyên nhân là số lượng Sói ban đầu chiếm 1/3 phòng, chỉ cần Sói cắn thành công 2 đêm và phe Dân vote nhầm 1 lần là số lượng Sói bằng số Dân, kích hoạt điều kiện thắng tức thì của Sói (`so Soi >= so Dan`).
-   - Cả hai cấu hình đều xuất hiện một tỷ lệ rất nhỏ kết quả **Hòa (`Draw`)** (khi Thợ Săn bị cắn/treo và bắn chết con Sói cuối cùng, khiến cả 2 phe cùng hết người sống).
+1. **Về kết quả thống kê mô phỏng (Simulation Balance dưới chiến lược Bot ngẫu nhiên)**:
+   - **Ván 8 người (2 Sói / 6 Dân = 25% Sói)**: Phe Dân đạt tỷ lệ thắng **26.14% – 26.70%**, phe Sói đạt **73.30% – 73.70%**.
+   - **Ván 9 người (3 Sói / 6 Dân = 33.3% Sói)**: Phe Dân đạt **9.60% – 10.17%**, phe Sói đạt **89.79% – 90.40%**.
+   - **Lưu ý quan trọng khi diễn giải**: Trong `Domain.Simulation`, các tác nhân (bot) chọn mục tiêu và bỏ phiếu ban ngày theo xác suất ngẫu nhiên hợp lệ (`pickRandom`) mà không sử dụng thông tin suy luận từ kết quả Tiên Tri hay thảo luận nhóm như người thật. Do Sói luôn thống nhất mục tiêu ban đêm trong khi Dân bỏ phiếu ngẫu nhiên ban ngày, tỷ lệ Sói thắng cao (~90% ở cấu hình 3 Sói) phản ánh đúng đặc trưng của **chiến lược bot ngẫu nhiên**, không phải kết luận rằng cấu hình 9 người mất cân bằng khi người thật chơi.
+   - Cả hai cấu hình đều ghi nhận một tỷ lệ nhỏ kết quả **Hòa (`Draw`: 0.04% – 0.16%)** khi Thợ Săn bị loại và bắn hạ con Sói cuối cùng, khiến cả hai phe cùng hết người sống.
 
 2. **Về hiệu năng song song (Parallel Speedup)**:
-   - Nhờ chiến lược `parMap rdeepseq` chia nhỏ việc mô phỏng trên các spark độc lập không chia sẻ tài nguyên, thời gian chạy giảm từ **5.2 giây xuống dưới 0.92 giây** cho 5.000 ván.
-   - Hệ số tăng tốc đạt **5.01x – 5.68x** trên CPU đa nhân, chứng minh rõ ràng lợi ích thực tế của Parallelism trong Haskell.
+   - Ở mốc **1.000 ván** và **5.000 ván**, `parMap rdeepseq` giúp giảm thời gian thực thi từ **6.75s – 8.14s xuống còn 1.48s – 1.75s**, đạt hệ số tăng tốc **4.09x – 4.66x**.
+   - Ở mốc **10.000 ván**, thời gian giảm từ **14.11s – 15.52s xuống còn 5.12s – 5.56s**, hệ số tăng tốc đạt **2.76x – 2.79x**. Hệ số tăng tốc ở 10.000 ván thấp hơn mốc 5.000 ván do benchmark giữ đồng thời cả hai danh sách `seqOutcomes` và `parOutcomes` (mỗi danh sách 10.000 phần tử đã `deepseq`) trong bộ nhớ để đối chiếu trực tiếp `seqOutcomes == parOutcomes`, làm tăng áp lực cấp phát Heap và chi phí đồng bộ Garbage Collection (stop-the-world GC) giữa 16 capabilities của GHC RTS.
 
 3. **Về tính tất định (E19)**:
-   - Ở toàn bộ 1.000 và 5.000 ván, so sánh mảng kết quả `outcomesSeq == outcomesPar` đều trả về `True` tuyệt đối. Bản song song không làm sai lệch bất kỳ kết quả hay trạng thái nào so với bản tuần tự.
+   - Trên toàn bộ các mốc **1.000, 5.000 và 10.000 ván** (cả cấu hình 8 người và 9 người), phép kiểm chứng `seqOutcomes == parOutcomes` và `seqStats == parStats` đều đạt `TRUE` (100%). Thuật toán song song bảo toàn tuyệt đối tính tất định và mọi bất biến `validateGameInvariant`.
 
 ---
 
@@ -101,11 +107,15 @@ Số liệu thực tế được đo đạc từ lệnh chạy `werewolf-simulat
 # Chạy mặc định 1.000 và 5.000 ván cho cả 2 cấu hình, ghi file report/balance.csv
 cabal run werewolf-simulate
 
-# Tùy chỉnh số ván, seed và file xuất kết quả:
+# Tùy chỉnh số ván (hỗ trợ cả dạng số thường, dấu chấm phân nhóm hoặc hậu tố k):
 cabal run werewolf-simulate -- --games 1000,5000,10000 --seed 2026 --output report/balance.csv
+cabal run werewolf-simulate -- --games=1k,5k,10k --seed=2026
+
+# Xem hướng dẫn sử dụng:
+cabal run werewolf-simulate -- --help
 ```
 
-### 5.2. Chạy Bộ kiểm thử tự động (E19)
+### 5.2. Chạy Bộ kiểm thử tự động (E19 & CLI Parser)
 ```powershell
 # Chạy test suite riêng cho X01
 cabal test x01-simulate-test --enable-tests --test-show-details=direct
@@ -113,4 +123,3 @@ cabal test x01-simulate-test --enable-tests --test-show-details=direct
 # Chạy toàn bộ test suites dự án để kiểm chứng không ảnh hưởng GameLoop
 cabal test all --enable-tests --test-show-details=direct -j1
 ```
-
