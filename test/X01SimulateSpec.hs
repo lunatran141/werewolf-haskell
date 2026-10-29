@@ -1,15 +1,23 @@
--- | X01: Bo kiem thu tu dong cho Parallel Simulation (E19).
+-- | X01: Bo kiem thu tu dong cho Parallel Simulation (E19) va CLI Parser (ReadP).
 -- Chung minh cung seed thi ban tuan tu (map) va ban song song (parMap rdeepseq)
--- cho ket qua dong nhat tuyet doi, giu invariant va khong anh huong GameLoop.
+-- cho ket qua dong nhat tuyet doi, giu invariant, CLI parser an toan khong crash.
 module Main (main) where
 
+import Control.DeepSeq (rnf)
+import Control.Exception (evaluate)
 import Test.Hspec
 import Test.QuickCheck
 
 import Domain.Simulation
   ( BalanceStats(..)
   , MatchOutcome(..)
+  , SimCliCommand(..)
+  , SimCliError(..)
+  , SimCliOptions(..)
   , SimConfig(..)
+  , defaultSimCliOptions
+  , parseSimulateArgs
+  , renderSimCliError
   , roles8Preset
   , roles9Preset
   , runParallel
@@ -69,7 +77,42 @@ main = hspec $ do
       outcomeWolfCount run1 `shouldBe` 2
       outcomeRounds run1 `shouldSatisfy` (> 0)
 
+  describe "X01 - CLI Parser Combinator (ReadP)" $ do
+
+    it "khong truyen tham so tra ve cau hinh mac dinh" $ do
+      parseSimulateArgs [] `shouldBe` Right (SimCliRun defaultSimCliOptions)
+
+    it "ho tro nhieu dang dau vao (--games 1000,5000,10000, hau to k, dau cham phan nhom, dau =)" $ do
+      parseSimulateArgs ["--games", "1000,5000,10000", "--seed", "2026", "--output", "report/balance.csv"]
+        `shouldBe` Right (SimCliRun (SimCliOptions [1000, 5000, 10000] 2026 "report/balance.csv"))
+      parseSimulateArgs ["--games=1k,5k,10k", "--seed=-42", "--output=out.csv"]
+        `shouldBe` Right (SimCliRun (SimCliOptions [1000, 5000, 10000] (-42) "out.csv"))
+      parseSimulateArgs ["--games", "1.000,10.000"]
+        `shouldBe` Right (SimCliRun (defaultSimCliOptions { simOptGames = [1000, 10000] }))
+      parseSimulateArgs ["--help"] `shouldBe` Right SimCliHelp
+
+    it "tu choi tuong minh gia tri so sai, co la hoac thieu gia tri ma khong crash" $ do
+      parseSimulateArgs ["--games", "1000,abc"]
+        `shouldBe` Left (SimInvalidGames "1000,abc")
+      parseSimulateArgs ["--games", "0"]
+        `shouldBe` Left (SimInvalidGames "0")
+      parseSimulateArgs ["--seed", "not-a-number"]
+        `shouldBe` Left (SimInvalidSeed "not-a-number")
+      parseSimulateArgs ["--unknown-flag"]
+        `shouldBe` Left (SimUnknownFlag "--unknown-flag")
+      parseSimulateArgs ["--games"]
+        `shouldBe` Left (SimMissingValue "--games")
+      parseSimulateArgs ["--games", "--seed", "2026"]
+        `shouldBe` Left (SimMissingValue "--games")
+      renderSimCliError (SimInvalidGames "abc") `shouldSatisfy` (not . null)
+
   describe "X01 - QuickCheck Property Tests" $ do
+
+    it "Property: parseSimulateArgs khong bao gio nem exception voi moi danh sach tham so bat ky" $
+      property $ \(args :: [String]) ->
+        ioProperty $ do
+          res <- evaluate (rnf (parseSimulateArgs args))
+          pure (res == ())
 
     it "Property: Voi moi seed va so van bat ky, sequential luon bang parallel" $
       property $ \(Positive countRaw) (seed :: Int) ->
@@ -111,4 +154,3 @@ main = hspec $ do
       statsTotalGames stats `shouldBe` 1000
       statsAllInvariantsValid stats `shouldBe` True
       statsWolfWins stats `shouldSatisfy` (> 0)
-

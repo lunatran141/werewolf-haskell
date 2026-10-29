@@ -9,16 +9,23 @@ import GHC.Clock (getMonotonicTimeNSec)
 import GHC.Conc (getNumCapabilities)
 import System.Directory (createDirectoryIfMissing)
 import System.Environment (getArgs)
+import System.Exit (ExitCode(ExitFailure), exitSuccess, exitWith)
 import System.FilePath (takeDirectory)
+import System.IO (hPutStrLn, stderr)
 import Text.Printf (printf)
 
 import Domain.Simulation
   ( BalanceStats(..)
+  , SimCliCommand(..)
+  , SimCliOptions(..)
   , SimConfig(..)
+  , parseSimulateArgs
+  , renderSimCliError
   , roles8Preset
   , roles9Preset
   , runParallel
   , runSequential
+  , simCliUsage
   )
 import Domain.Types (Role)
 
@@ -134,7 +141,22 @@ printConsoleRow r =
 main :: IO ()
 main = do
   args <- getArgs
+  case parseSimulateArgs args of
+    Left err -> do
+      hPutStrLn stderr (renderSimCliError err)
+      hPutStrLn stderr simCliUsage
+      exitWith (ExitFailure 2)
+    Right SimCliHelp -> do
+      putStr simCliUsage
+      exitSuccess
+    Right (SimCliRun opts) -> runWithOptions opts
+
+runWithOptions :: SimCliOptions -> IO ()
+runWithOptions opts = do
   cores <- getNumCapabilities
+  let counts = simOptGames opts
+      seed = simOptSeed opts
+      outPath = simOptOutput opts
 
   putStrLn "=========================================================================================="
   putStrLn "                  WEREWOLF HASKELL - X01 PARALLEL SIMULATION BENCHMARK                   "
@@ -145,8 +167,6 @@ main = do
     ("Village%" :: String) ("Wolf%" :: String) ("Draw%" :: String) ("AvgDay" :: String)
     ("Seq(ms)" :: String) ("Par(ms)" :: String) ("Speedup" :: String) ("E19 (Seq==Par)" :: String)
   putStrLn "------------------------------------------------------------------------------------------"
-
-  let (counts, seed, outPath) = parseArgs args
 
   rows <- sequence
     [ do
@@ -169,17 +189,3 @@ main = do
   createDirectoryIfMissing True (takeDirectory outPath)
   writeFile outPath (csvHeader ++ csvBody)
   putStrLn "Done! Parallel simulation completed successfully."
-
-parseArgs :: [String] -> ([Int], Int, FilePath)
-parseArgs [] = ([1000, 5000], 2026, "report/balance.csv")
-parseArgs ("--games" : g : rest) =
-  let parsedGames = map read (words (map (\c -> if c == ',' then ' ' else c) g))
-      (_, s, o) = parseArgs rest
-  in (parsedGames, s, o)
-parseArgs ("--seed" : s : rest) =
-  let (g, _, o) = parseArgs rest
-  in (g, read s, o)
-parseArgs ("--output" : o : rest) =
-  let (g, s, _) = parseArgs rest
-  in (g, s, o)
-parseArgs (_ : rest) = parseArgs rest
