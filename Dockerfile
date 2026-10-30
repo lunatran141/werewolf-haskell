@@ -11,7 +11,7 @@ COPY app ./app
 COPY src ./src
 COPY test ./test
 RUN cabal build all --enable-tests \
-    && cabal test all --enable-tests --test-show-details=direct \
+    && cabal test all --enable-tests --test-show-details=direct -j1 \
     && mkdir -p /out \
     && cp "$(cabal list-bin exe:werewolf-server)" /out/werewolf-server \
     && cp "$(cabal list-bin exe:analytics-worker)" /out/analytics-worker \

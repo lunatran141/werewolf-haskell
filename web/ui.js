@@ -194,6 +194,10 @@ function targetSelectionContext() {
   const canAct = state.phase === "Night" && state.connected && state.pending === null &&
     !state.nightActionDone && getSelfPlayer()?.alive !== false;
   if (!canAct) return null;
+  const roleCanAct = state.selfRole === "Werewolf"
+    ? state.nightStage === "Wolves"
+    : state.nightStage === "Village";
+  if (!roleCanAct) return null;
   const choices = {
     Werewolf: ["WolfTarget", el.wolfTarget],
     Seer: ["SeerTarget", el.seerTarget],

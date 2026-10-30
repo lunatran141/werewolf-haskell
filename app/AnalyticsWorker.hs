@@ -23,8 +23,8 @@ import Network.Socket
   , withSocketsDo
   )
 import qualified Network.Socket.ByteString as SocketBS
-import System.Environment (lookupEnv)
-import System.IO (BufferMode(LineBuffering), hSetBuffering, stderr, stdout)
+
+import System.IO (BufferMode(LineBuffering), hPutStrLn, hSetBuffering, stderr, stdout)
 
 import Analytics.Store
   ( AnalyticsStore
@@ -42,17 +42,24 @@ import Server.ReplayStore
   , readReplay
   , renderStorageError
   )
+import Server.Config (WorkerConfig(..), loadWorkerConfig, renderConfigError)
 import Server.SafeLog (logInfo, logWarning)
+import System.Exit (ExitCode(ExitFailure), exitWith)
 
 main :: IO ()
 main = withSocketsDo $ do
   hSetBuffering stdout LineBuffering
   hSetBuffering stderr LineBuffering
-  port <- maybe "9090" id <$> lookupEnv "ANALYTICS_PORT"
-  outputPath <- maybe "analytics/matches.jsonl" id
-    <$> lookupEnv "ANALYTICS_OUTPUT"
-  replayDirectory <- lookupEnv "REPLAY_DIR"
-  let replayStore = replayStoreFromDirectory replayDirectory
+  configResult <- loadWorkerConfig
+  workerConfig <- case configResult of
+    Left err -> do
+      hPutStrLn stderr (renderConfigError err)
+      exitWith (ExitFailure 1)
+    Right cfg -> pure cfg
+  let port = show (workerPort workerConfig)
+      outputPath = workerOutputPath workerConfig
+      replayStore = replayStoreFromDirectory (workerReplayDir workerConfig)
+
   store <- newAnalyticsStore outputPath
   address <- resolveAddress port
   bracket (openSocket address) close $ \listener -> do

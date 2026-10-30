@@ -7,7 +7,7 @@ Task X01 là một phần mở rộng ứng dụng kiến thức môn học (**C
 1. **Mô phỏng quy mô lớn**: Xây dựng bộ mô phỏng thuần (*Pure Simulator*) có khả năng chạy độc lập từ **1.000 đến 10.000 ván chơi** để khảo sát định lượng mức độ cân bằng game giữa cấu hình **8 người (2 Sói)** và **9 người (3 Sói)**.
 2. **Thuật toán song song với Evaluation Strategies**: Áp dụng thư viện `parallel` (`Control.Parallel.Strategies.parMap`, `Control.DeepSeq.rdeepseq`) để phân phối các ván mô phỏng độc lập trên toàn bộ các nhân CPU khả dụng (`-threaded -rtsopts -with-rtsopts=-N`).
 3. **Chứng minh tính xác định (Deterministic Parallelism - Kịch bản E19)**: Với cùng một seed ban đầu, kết quả của bản chạy **tuần tự (`map`)** và bản chạy **song song (`parMap rdeepseq`)** luôn **giống nhau tuyệt đối** (từng ván đấu và bảng tổng hợp thống kê).
-4. **Báo cáo thực nghiệm**: Tự động đo thời gian thực thi (monotonic clock), tính hệ số tăng tốc (*Speedup*), tỷ lệ thắng của từng phe và xuất dữ liệu ra file [report/balance.csv](file:///d:/HK5/LTH/LTH_project/werewolf-haskell/report/balance.csv).
+4. **Báo cáo thực nghiệm**: Tự động đo thời gian thực thi (monotonic clock), tính hệ số tăng tốc (*Speedup*), tỷ lệ thắng của từng phe và xuất dữ liệu ra file [report/balance.csv](../report/balance.csv).
 
 ---
 
@@ -72,7 +72,7 @@ Hàm `parseSimulateArgs` trong `Domain.Simulation` sử dụng thư viện parse
 
 ## 4. Kết quả thực nghiệm & Phân tích cân bằng Game
 
-Số liệu thực tế được đo đạc từ lệnh chạy `werewolf-simulate --games 1000,5000,10000 --seed 2026 --output report/balance.csv` trên máy **16 CPU Cores** (ghi nhận tại [report/balance.csv](file:///d:/HK5/LTH/LTH_project/werewolf-haskell/report/balance.csv)):
+Số liệu thực tế được đo đạc từ lệnh chạy `werewolf-simulate --games 1000,5000,10000 --seed 2026 --output report/balance.csv` trên máy chạy **16 GHC RTS capabilities** (`-N`, tương ứng 16 logical processors của máy đo) (ghi nhận tại [report/balance.csv](../report/balance.csv)):
 
 | Cấu hình | Số ván | Seed | Thắng Dân | Thắng Sói | Hòa | Tỷ lệ Dân | Tỷ lệ Sói | Tỷ lệ Hòa | Vòng tb | Tuần tự (ms) | Song song (ms) | Speedup | E19 (Seq == Par) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
@@ -89,11 +89,11 @@ Số liệu thực tế được đo đạc từ lệnh chạy `werewolf-simulat
    - **Ván 8 người (2 Sói / 6 Dân = 25% Sói)**: Phe Dân đạt tỷ lệ thắng **26.14% – 26.70%**, phe Sói đạt **73.30% – 73.70%**.
    - **Ván 9 người (3 Sói / 6 Dân = 33.3% Sói)**: Phe Dân đạt **9.60% – 10.17%**, phe Sói đạt **89.79% – 90.40%**.
    - **Lưu ý quan trọng khi diễn giải**: Trong `Domain.Simulation`, các tác nhân (bot) chọn mục tiêu và bỏ phiếu ban ngày theo xác suất ngẫu nhiên hợp lệ (`pickRandom`) mà không sử dụng thông tin suy luận từ kết quả Tiên Tri hay thảo luận nhóm như người thật. Do Sói luôn thống nhất mục tiêu ban đêm trong khi Dân bỏ phiếu ngẫu nhiên ban ngày, tỷ lệ Sói thắng cao (~90% ở cấu hình 3 Sói) phản ánh đúng đặc trưng của **chiến lược bot ngẫu nhiên**, không phải kết luận rằng cấu hình 9 người mất cân bằng khi người thật chơi.
-   - Cả hai cấu hình đều ghi nhận một tỷ lệ nhỏ kết quả **Hòa (`Draw`: 0.04% – 0.16%)** khi Thợ Săn bị loại và bắn hạ con Sói cuối cùng, khiến cả hai phe cùng hết người sống.
+   - Cả hai cấu hình đều ghi nhận một tỷ lệ nhỏ kết quả **Hòa (`Draw`: 0.04% – 0.16%)**. Trong `Domain.Simulation`, `Draw` gồm hai trường hợp: (a) cả hai phe cùng hết người sống, ví dụ Thợ Săn bị loại và bắn hạ con Sói cuối cùng; (b) ván chạm giới hạn an toàn `stepCount >= 30` mà chưa có kết quả. File CSV chưa tách riêng hai nhóm này nên không khẳng định được tỷ lệ của từng nhóm; vòng trung bình chỉ khoảng 3.4 – 3.5 nên nhóm (b) được kỳ vọng rất hiếm.
 
 2. **Về hiệu năng song song (Parallel Speedup)**:
    - Ở mốc **1.000 ván** và **5.000 ván**, `parMap rdeepseq` giúp giảm thời gian thực thi từ **6.75s – 8.14s xuống còn 1.48s – 1.75s**, đạt hệ số tăng tốc **4.09x – 4.66x**.
-   - Ở mốc **10.000 ván**, thời gian giảm từ **14.11s – 15.52s xuống còn 5.12s – 5.56s**, hệ số tăng tốc đạt **2.76x – 2.79x**. Hệ số tăng tốc ở 10.000 ván thấp hơn mốc 5.000 ván do benchmark giữ đồng thời cả hai danh sách `seqOutcomes` và `parOutcomes` (mỗi danh sách 10.000 phần tử đã `deepseq`) trong bộ nhớ để đối chiếu trực tiếp `seqOutcomes == parOutcomes`, làm tăng áp lực cấp phát Heap và chi phí đồng bộ Garbage Collection (stop-the-world GC) giữa 16 capabilities của GHC RTS.
+   - Ở mốc **10.000 ván**, thời gian giảm từ **14.11s – 15.52s xuống còn 5.12s – 5.56s**, hệ số tăng tốc đạt **2.76x – 2.79x**. Hệ số tăng tốc ở 10.000 ván thấp hơn mốc 5.000 ván; giả thuyết kỹ thuật giải thích hiện tượng này là do chương trình benchmark giữ đồng thời cả hai danh sách `seqOutcomes` và `parOutcomes` (mỗi danh sách 10.000 phần tử đã `deepseq`) trong bộ nhớ để đối chiếu trực tiếp `seqOutcomes == parOutcomes`, làm tăng áp lực cấp phát Heap và chi phí đồng bộ Garbage Collection (stop-the-world GC) giữa 16 capabilities của GHC RTS. Có thể kiểm chứng định lượng giả thuyết này bằng cách kích hoạt cờ RTS profiling (`werewolf-simulate +RTS -s -N16`) để theo dõi tỷ lệ `% GC time` và heap residency thực tế.
 
 3. **Về tính tất định (E19)**:
    - Trên toàn bộ các mốc **1.000, 5.000 và 10.000 ván** (cả cấu hình 8 người và 9 người), phép kiểm chứng `seqOutcomes == parOutcomes` và `seqStats == parStats` đều đạt `TRUE` (100%). Thuật toán song song bảo toàn tuyệt đối tính tất định và mọi bất biến `validateGameInvariant`.

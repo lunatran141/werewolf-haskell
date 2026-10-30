@@ -20,9 +20,10 @@ import Control.Concurrent.STM
   , writeTBQueue
   , writeTVar
   )
-import Control.Exception (SomeException, bracket, try)
+import Control.Exception (SomeException, bracket, finally, try)
 import Control.Monad (forM, forM_)
 import Data.Either (isRight)
+import Data.List (isInfixOf)
 import Data.Unique (hashUnique, newUnique)
 import Domain.Engine
   ( closeWolfVoting
@@ -100,6 +101,7 @@ import Server.Room
   , newRoomRuntime
   , newRoomRuntimeWithCapacity
   )
+import Server.RoomWorker (startRoomWorkerGroup)
 import Server.Supervisor
   ( SupervisorEvent(..)
   , activeWorkerCount
@@ -845,6 +847,31 @@ e17SupervisionSpec = describe "T08 E17 - Supervision & Worker Failure Cleanup" $
     shutdownSupervisor otherSup
     otherCountAfter <- activeWorkerCount otherSup
     otherCountAfter `shouldBe` 0
+
+  it "Loi game-loop cua mot phong qua startRoomWorkerGroup chi huy worker cua chinh phong do" $ do
+    failures <- newEmptyMVar
+    analyticsCancelled <- newEmptyMVar
+    crash <- newEmptyMVar
+    badSup <- startRoomWorkerGroup "BAD"
+      (threadDelay 10000000 `finally` putMVar analyticsCancelled ())
+      (takeMVar crash >> ioError (userError "simulated room crash"))
+      (putMVar failures)
+    goodSup <- startRoomWorkerGroup "GOOD"
+      (threadDelay 10000000)
+      (threadDelay 10000000)
+      (\_ -> pure ())
+    threadDelay 50000
+    putMVar crash ()
+
+    takeMVar analyticsCancelled
+    failure <- takeMVar failures
+    failure `shouldSatisfy` ("simulated room crash" `isInfixOf`)
+
+    threadDelay 50000
+    badCount <- activeWorkerCount badSup
+    goodCount <- activeWorkerCount goodSup
+    (badCount, goodCount) `shouldBe` (0, 2)
+    shutdownSupervisor goodSup
 
 -- =============================================================================
 -- Chat & Privacy Filter (Dead Werewolves, Role Reveal only at GameOver)

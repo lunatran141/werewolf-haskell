@@ -1,8 +1,8 @@
 module Server.WebSocket (webSocketApp) where
 
-import Control.Concurrent (ThreadId, forkIO, killThread)
+import Control.Concurrent (ThreadId, killThread)
 
-import Control.Concurrent.MVar (modifyMVar, withMVar)
+import Control.Concurrent.MVar (modifyMVar, newEmptyMVar, putMVar, readMVar, withMVar)
 
 import Control.Concurrent.STM
 
@@ -107,6 +107,7 @@ import Server.Connection
   , enqueueOutbound
   , newOutboundQueue
   , readOutboundRecoverable
+  , runSupervisedConnection
   , tryEnqueueRoomCommand
   )
 
@@ -128,7 +129,12 @@ import Server.Room
 
   )
 
-import Server.Supervisor (runIgnoringBenignSocketException)
+import Server.SafeLog (CorrelationLog(..), LogLevel(..), logCorrelation)
+import Server.Supervisor
+  ( Supervisor
+  , forkSupervised
+  , runIgnoringBenignSocketException
+  )
 import System.Timeout (timeout)
 
 import System.Random (newStdGen, randomIO)
@@ -184,6 +190,62 @@ submitCommand
   -> IO (Either GameError GameState)
 
 submitCommand room requestId actor command = do
+  result <- submitCommandUnlogged room requestId actor command
+  logCommandCorrelation room requestId actor command result
+  pure result
+
+-- Ghi vết requestId -> gameId -> playerId -> eventType/errorCode cho mọi command.
+-- Chỉ ghi tên loại lệnh, không ghi mục tiêu, vai trò hay nội dung chat.
+logCommandCorrelation
+  :: RoomRuntime
+  -> RequestId
+  -> PlayerId
+  -> Command
+  -> Either GameError GameState
+  -> IO ()
+logCommandCorrelation room requestId actor command result =
+  logCorrelation level "game-server"
+    CorrelationLog
+      { corrRequestId = requestId
+      , corrGameId = roomId room
+      , corrPlayerId = actor
+      , corrEventType = commandEventName command
+      , corrErrorCode = errorCode
+      }
+    []
+  where
+    (level, errorCode) =
+      case result of
+        Right _ -> (Info, Nothing)
+        Left err -> (Warning, Just (show err))
+
+commandEventName :: Command -> String
+commandEventName command =
+  case command of
+    Join _ _ -> "Join"
+    JoinWithAppearance _ _ _ -> "JoinWithAppearance"
+    Leave _ -> "Leave"
+    KickPlayer _ _ -> "KickPlayer"
+    SetReady _ _ -> "SetReady"
+    StartGame _ _ -> "StartGame"
+    EndGame _ -> "EndGame"
+    AdvancePhase -> "AdvancePhase"
+    NightAction _ _ -> "NightAction"
+    Vote _ _ -> "Vote"
+    Chat _ _ -> "Chat"
+    ChatInChannel _ _ _ -> "ChatInChannel"
+    SkipDiscussion _ -> "SkipDiscussion"
+    ResolveNight -> "ResolveNight"
+    ResolveVoting -> "ResolveVoting"
+    ResolveHunter _ _ -> "ResolveHunter"
+
+submitCommandUnlogged
+  :: RoomRuntime
+  -> RequestId
+  -> PlayerId
+  -> Command
+  -> IO (Either GameError GameState)
+submitCommandUnlogged room requestId actor command = do
 
   reply <- newEmptyTMVarIO
 
@@ -292,7 +354,9 @@ isChatEvent event =
 
 beginSession
 
-  :: RoomRuntime
+  :: Supervisor
+
+  -> RoomRuntime
 
   -> PlayerId
 
@@ -302,7 +366,7 @@ beginSession
 
   -> IO ()
 
-beginSession room actor sessionRef outbound = do
+beginSession supervisor room actor sessionRef outbound = do
 
   let enqueueSTM = void . enqueueOutbound outbound
 
@@ -397,7 +461,9 @@ beginSession room actor sessionRef outbound = do
 
   sendPhaseTimeRemaining outbound room
 
-  broadcastThread <- forkIO $ runIgnoringBenignSocketException $ forever $ do
+  broadcastThread <- forkSupervised supervisor
+    ("ws-broadcaster-" ++ roomId room ++ "-" ++ actor) $
+    runIgnoringBenignSocketException $ forever $ do
 
     update <- atomically (readTChan updates)
 
@@ -494,18 +560,19 @@ newSessionToken = do
   pure (showHex first "" ++ showHex second "")
 
 establishNewSession
-  :: RoomRuntime
+  :: Supervisor
+  -> RoomRuntime
   -> PlayerId
   -> IORef (Maybe (RoomRuntime, ThreadId))
   -> OutboundQueue
   -> IO ()
-establishNewSession room actor sessionRef outbound = do
+establishNewSession supervisor room actor sessionRef outbound = do
   token <- newSessionToken
   atomically $
     modifyTVar' (roomReconnectTokens room)
       (((token, actor) :) . filter ((/= actor) . snd))
   sendToClient outbound (MsgSessionEstablished (roomId room) actor token)
-  beginSession room actor sessionRef outbound
+  beginSession supervisor room actor sessionRef outbound
 
 -- Tra loi khi tao phong that bai.
 
@@ -665,6 +732,8 @@ handleClientMessage
 
   -> (RoomRuntime -> IO ())
 
+  -> Supervisor
+
   -> IORef PlayerId
 
   -> IORef (Maybe (RoomRuntime, ThreadId))
@@ -675,7 +744,7 @@ handleClientMessage
 
   -> IO ()
 
-handleClientMessage registry startWorker actorRef sessionRef outbound message = do
+handleClientMessage registry startWorker supervisor actorRef sessionRef outbound message = do
 
   actor <- readIORef actorRef
 
@@ -705,7 +774,7 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
             Just (room, restoredActor) -> do
               writeIORef actorRef restoredActor
               sendToClient outbound (MsgSessionEstablished rid restoredActor token)
-              beginSession room restoredActor sessionRef outbound
+              beginSession supervisor room restoredActor sessionRef outbound
 
     -- Tao phong.
 
@@ -715,29 +784,29 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
 
       case current of
 
-        Just _ ->
-
+        Just _ -> do
+          logCorrelation Warning "game-server"
+            (CorrelationLog requestId rid actor "CreateRoom" (Just "ALREADY_JOINED")) []
           reject outbound requestId "ALREADY_JOINED"
-
             "Ban da o trong mot phong."
 
         Nothing -> do
 
           result <-
-
             createRoomWithHost registry rid requestId actor name startWorker
 
           case result of
 
-            Left err ->
-
+            Left err -> do
+              logCorrelation Warning "game-server"
+                (CorrelationLog requestId rid actor "CreateRoom" (Just (show err))) []
               sendToClient outbound
-
                 (createErrorReply requestId rid actor name err)
 
-            Right (room, _) ->
-
-              establishNewSession room actor sessionRef outbound
+            Right (room, _) -> do
+              logCorrelation Info "game-server"
+                (CorrelationLog requestId rid actor "CreateRoom" Nothing) []
+              establishNewSession supervisor room actor sessionRef outbound
 
 
     -- Tao phong voi Appearance do nguoi choi chon.
@@ -745,7 +814,9 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
       current <- readIORef sessionRef
 
       case current of
-        Just _ ->
+        Just _ -> do
+          logCorrelation Warning "game-server"
+            (CorrelationLog requestId rid actor "CreateRoomWithAppearance" (Just "ALREADY_JOINED")) []
           reject outbound requestId "ALREADY_JOINED"
             "Ban da o trong mot phong."
 
@@ -755,12 +826,16 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
               registry rid requestId actor name appearance startWorker
 
           case result of
-            Left err ->
+            Left err -> do
+              logCorrelation Warning "game-server"
+                (CorrelationLog requestId rid actor "CreateRoomWithAppearance" (Just (show err))) []
               sendToClient outbound
                 (createErrorReply requestId rid actor name err)
 
-            Right (room, _) ->
-              establishNewSession room actor sessionRef outbound
+            Right (room, _) -> do
+              logCorrelation Info "game-server"
+                (CorrelationLog requestId rid actor "CreateRoomWithAppearance" Nothing) []
+              establishNewSession supervisor room actor sessionRef outbound
 
 
     -- Tham gia phong.
@@ -786,10 +861,10 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
 
           case found of
 
-            Nothing ->
-
+            Nothing -> do
+              logCorrelation Warning "game-server"
+                (CorrelationLog requestId rid actor "Join" (Just "ROOM_NOT_FOUND")) []
               reject outbound requestId "ROOM_NOT_FOUND"
-
                 "Khong tim thay phong."
 
             Just room -> do
@@ -804,7 +879,7 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
 
                 Right _ ->
 
-                  establishNewSession room actor sessionRef outbound
+                  establishNewSession supervisor room actor sessionRef outbound
 
 
     -- Tham gia phong voi Appearance do nguoi choi chon.
@@ -823,7 +898,9 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
             pure (lookup rid rooms)
 
           case found of
-            Nothing ->
+            Nothing -> do
+              logCorrelation Warning "game-server"
+                (CorrelationLog requestId rid actor "JoinWithAppearance" (Just "ROOM_NOT_FOUND")) []
               reject outbound requestId "ROOM_NOT_FOUND"
                 "Khong tim thay phong."
 
@@ -835,7 +912,7 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
                     (lobbyReply rid requestId actor command result)
 
                 Right _ ->
-                  establishNewSession room actor sessionRef outbound
+                  establishNewSession supervisor room actor sessionRef outbound
 
 
     -- Roi phong.
@@ -1062,12 +1139,16 @@ handleClientMessage registry startWorker actorRef sessionRef outbound message = 
       current <- readIORef sessionRef
 
       case current of
-        Nothing ->
+        Nothing -> do
+          logCorrelation Warning "game-server"
+            (CorrelationLog requestId rid currentActor (commandEventName command) (Just "NOT_JOINED")) []
           reject outbound requestId "NOT_JOINED"
             "Ban chua tham gia phong."
 
         Just (room, _)
-          | rid /= roomId room ->
+          | rid /= roomId room -> do
+              logCorrelation Warning "game-server"
+                (CorrelationLog requestId rid currentActor (commandEventName command) (Just "WRONG_ROOM")) []
               reject outbound requestId "WRONG_ROOM"
                 "Ban khong o trong phong nay."
 
@@ -1117,81 +1198,58 @@ webSocketApp registry startWorker pending = do
 
   outbound <- newOutboundQueue
 
-  -- Moi connection co mot writer rieng, bo qua ngoai le dong socket thong thuong.
+  -- Moi connection co Supervisor rieng cho writer, reader va broadcaster.
+  supervisorVar <- newEmptyMVar
 
-  writerThread <- forkIO $ runIgnoringBenignSocketException $ let
-    writeNext = do
-      next <- atomically (readOutboundRecoverable outbound)
-      case next of
-        Just message -> do
-          WS.sendTextData connection (encodeServerMessage message)
-          writeNext
-        Nothing -> WS.sendClose connection
-          (BL8.pack "outbound queue overflow; reconnect for snapshot")
-    in writeNext
+  let writerLoop = let
+        writeNext = do
+          next <- atomically (readOutboundRecoverable outbound)
+          case next of
+            Just message -> do
+              WS.sendTextData connection (encodeServerMessage message)
+              writeNext
+            Nothing -> WS.sendClose connection
+              (BL8.pack "outbound queue overflow; reconnect for snapshot")
+        in writeNext
 
-  let receiveLoop = runIgnoringBenignSocketException $ forever $ do
-
-        frame <- WS.receiveDataMessage connection
-
-        case frame of
-
-          WS.Text payload _ ->
-
-            if not (clientMessageWithinLimit payload)
-              then sendToClient outbound
-                (MsgRejected Nothing "MESSAGE_TOO_LARGE"
-                  "Tin gui len vuot qua gioi han cho phep.")
-              else
-                case decodeClientMessage payload of
-
-                  Left _ ->
-
-                    sendToClient outbound
-
-                      (MsgRejected Nothing "INVALID_JSON"
-
-                        "JSON khong hop le.")
-
-                  Right clientMessage ->
-
-                    handleClientMessage
-
-                      registry
-
-                      startWorker
-
-                      actorRef
-
-                      sessionRef
-
-                      outbound
-
-                      clientMessage
-
-          WS.Binary _ ->
-
-            sendToClient outbound
-
-              (MsgRejected Nothing "TEXT_REQUIRED"
-
-                "Hay gui text frame JSON.")
+      receiveLoop = do
+        connSupervisor <- readMVar supervisorVar
+        forever $ do
+          frame <- WS.receiveDataMessage connection
+          case frame of
+            WS.Text payload _ ->
+              if not (clientMessageWithinLimit payload)
+                then sendToClient outbound
+                  (MsgRejected Nothing "MESSAGE_TOO_LARGE"
+                    "Tin gui len vuot qua gioi han cho phep.")
+                else
+                  case decodeClientMessage payload of
+                    Left _ ->
+                      sendToClient outbound
+                        (MsgRejected Nothing "INVALID_JSON"
+                          "JSON khong hop le.")
+                    Right clientMessage ->
+                      handleClientMessage
+                        registry
+                        startWorker
+                        connSupervisor
+                        actorRef
+                        sessionRef
+                        outbound
+                        clientMessage
+            WS.Binary _ ->
+              sendToClient outbound
+                (MsgRejected Nothing "TEXT_REQUIRED"
+                  "Hay gui text frame JSON.")
 
       cleanup = do
-
         current <- readIORef sessionRef
-
         case current of
-
-          Just (_, broadcastThread) -> do
-
+          Just (_, broadcastThread) ->
             -- Mất kết nối không xóa Player; token cho phép nối lại đúng phiên.
             killThread broadcastThread
-
           Nothing ->
-
             pure ()
 
-        killThread writerThread
-
-  receiveLoop `finally` cleanup
+  runSupervisedConnection (putMVar supervisorVar) writerLoop
+    (receiveLoop `finally` cleanup)
