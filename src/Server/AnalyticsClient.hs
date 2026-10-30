@@ -81,7 +81,7 @@ newAnalyticsPublisher host port =
 
 newAnalyticsPublisherWithSpool :: String -> String -> FilePath -> IO AnalyticsPublisher
 newAnalyticsPublisherWithSpool host port spoolDir = do
-  createDirectoryIfMissing True spoolDir
+  createDirectoryIfMissing True spoolDir `catch` \(_ :: IOException) -> pure ()
   AnalyticsPublisher host port <$> newTBQueueIO 256 <*> pure spoolDir
 
 newAnalyticsPublisherFromEnv :: IO AnalyticsPublisher
@@ -106,7 +106,7 @@ spoolFilePath dir mId =
 
 writeSpoolSummary :: FilePath -> MatchSummary -> IO ()
 writeSpoolSummary dir summary = do
-  createDirectoryIfMissing True dir
+  createDirectoryIfMissing True dir `catch` \(_ :: IOException) -> pure ()
   let path = spoolFilePath dir (matchId summary)
   BS.writeFile path (encodeMatchSummaryLine summary)
     `catch` \(_ :: IOException) -> pure ()
