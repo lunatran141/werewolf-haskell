@@ -117,7 +117,7 @@ Kiểm tra round-trip JSON và đối chiếu schema frontend cho các thông đ
 | :--- | :--- | :--- | :--- | :--- |
 | **T03** | Join/Leave/Ready; chuỗi lệnh giữ Lobby hợp lệ, tối đa 9 người và Host đúng | `test/T03LobbySpec.hs` | **PASS: 18/18**; QuickCheck 100 lần | Đã tích hợp |
 | **T04** | StartGame 8/9 người; invariant sau Join/Ready và khi chuyển pha | `test/T04PhaseSpec.hs` | **PASS: 24/24**; mỗi property 100 lần | Đã tích hợp |
-| **T10** | Chat, quyền vai, reconnect, bong bóng chat tự ẩn và giữ lịch sử | `test/T07UiSpec.cjs` | **PASS: 29/29** | Đã tích hợp |
+| **T10** | Chat, quyền vai, reconnect, bong bóng chat tự ẩn và giữ lịch sử | `test/T07UiSpec.cjs` | **PASS: 34/34** | Đã tích hợp |
 
 ---
 
@@ -125,24 +125,33 @@ Kiểm tra round-trip JSON và đối chiếu schema frontend cho các thông đ
 
 | STT | Test Suite | File Test | Số lượng Test | Trạng thái |
 | :---: | :--- | :--- | :---: | :---: |
-| 1 | `t11-property-replay-test` | `test/T11PropertyReplaySpec.hs` | 17 (gồm 700 QuickCheck runs) | **PASS** |
-| 2 | `server-gameloop-test` | `test/ServerGameLoopSpec.hs` | 27 | **PASS** |
-| 3 | `protocol-lobby-test` | `test/ProtocolLobbySpec.hs` | 53 | **PASS** |
-| 4 | `skeleton-test` | `test/Spec.hs` | 1 | **PASS** |
-| 5 | `t02-domain-test` | `test/DomainT02Spec.hs` | 23 | **PASS** |
+| 1 | `t11-property-replay-test` | `test/T11PropertyReplaySpec.hs` | 16 | **PASS** |
+| 2 | `server-gameloop-test` | `test/ServerGameLoopSpec.hs` | 28 | **PASS** |
+| 3 | `protocol-lobby-test` | `test/ProtocolLobbySpec.hs` | 54 | **PASS** |
+| 4 | `skeleton-test` | `test/SkeletonSpec.hs` | 1 | **PASS** |
+| 5 | `t02-domain-test` | `test/T02Main.hs` | 62 | **PASS** |
 | 6 | `t03-lobby-test` | `test/T03LobbySpec.hs` | 18 | **PASS** |
-| 7 | `t04-phase-test` | `test/T04PhaseSpec.hs` | 24 (gồm QuickCheck) | **PASS** |
-| 8 | `t05-night-test` | `test/T05NightSpec.hs` | 27 | **PASS** |
-| 9 | `t05-rng-test` | `test/T05RngSpec.hs` | 8 (gồm QuickCheck) | **PASS** |
-| 10 | `t05-websocket-test` | `test/T05WebSocketSpec.hs` | 13 | **PASS** |
-| 11 | `t06-domain-test` | `test/DomainT06Spec.hs` | 24 | **PASS** |
-| 12 | `t06-gameloop-test` | `test/T06GameLoopSpec.hs` | 5 | **PASS** |
+| 7 | `t04-phase-test` | `test/T04PhaseSpec.hs` | 24 | **PASS** |
+| 8 | `t05-night-test` | `test/T05NightSpec.hs` | 94 | **PASS** |
+| 9 | `t05-rng-test` | `test/T05RngSpec.hs` | 8 | **PASS** |
+| 10 | `t05-websocket-test` | `test/T05WebSocketSpec.hs` | 17 | **PASS** |
+| 11 | `t06-domain-test` | `test/T06Main.hs` | 25 | **PASS** |
+| 12 | `t06-gameloop-test` | `test/T06GameLoopSpec.hs` | 9 | **PASS** |
 | 13 | `t06-protocol-test` | `test/T06ProtocolSpec.hs` | 13 | **PASS** |
 | 14 | `t06-websocket-test` | `test/T06WebSocketSpec.hs` | 7 | **PASS** |
 | 15 | `t07-win-test` | `test/T07WinSpec.hs` | 44 | **PASS** |
-| 16 | Node.js UI Test (T06) | `test/T06UiSpec.cjs` | 18 | **PASS** |
-| 17 | Node.js UI Test (T07 & T10) | `test/T07UiSpec.cjs` | 29 | **PASS** |
-| **Tổng cộng** | **15 Haskell Suites + 2 UI Suites** | | **323+ Tests & Properties** | **100% PASS** |
+| 16 | `t12-full-game-e2e-test` | `test/T12FullGameE2ESpec.hs` | 3 | **PASS** |
+| 17 | `t13-release-hardening-test` | `test/T13ReleaseHardeningSpec.hs` | 7 | **PASS** |
+| 18 | `host-controls-test` | `test/HostControlsSpec.hs` | 7 | **PASS** |
+| 19 | `server-config-test` | `test/ServerConfigSpec.hs` | 4 | **PASS** |
+| 20 | `x01-simulate-test` | `test/X01SimulateSpec.hs` | 11 | **PASS** |
+| 21 | `x02-analytics-protocol-test` | `test/X02AnalyticsProtocolSpec.hs` | 4 | **PASS** |
+| 22 | `x02-analytics-worker-test` | `test/X02AnalyticsWorkerSpec.hs` | 4 | **PASS** |
+| 23 | `x02-analytics-client-test` | `test/X02AnalyticsClientSpec.hs` | 7 | **PASS** |
+| 24 | `x03-replay-store-test` | `test/X03ReplayStoreSpec.hs` | 10 | **PASS** |
+| 25 | Node.js UI Test (T06) | `test/T06UiSpec.cjs` | 12 | **PASS** |
+| 26 | Node.js UI Test (T07 & T10) | `test/T07UiSpec.cjs` | 34 | **PASS** |
+| **Tổng cộng** | **24 Haskell Suites + 2 UI Suites** | | **477 Haskell + 46 UI = 523 Tests & Properties** | **100% PASS** |
 
 ---
 
@@ -151,10 +160,10 @@ Kiểm tra round-trip JSON và đối chiếu schema frontend cho các thông đ
 Chạy toàn bộ cổng kiểm thử tự động trước khi commit hoặc tạo PR:
 
 ```powershell
-# 1. Chạy toàn bộ 15 test suite Haskell (bao gồm cả QuickCheck và WebSocket tích hợp)
+# 1. Chạy toàn bộ 24 test suite Haskell (bao gồm cả QuickCheck và WebSocket tích hợp)
 cabal test all --enable-tests --test-show-details=direct -j1
 
-# 2. Chạy toàn bộ 47 kiểm thử giao diện người dùng Node.js
+# 2. Chạy toàn bộ 46 kiểm thử giao diện người dùng Node.js
 node --test test/T06UiSpec.cjs test/T07UiSpec.cjs
 
 # 3. Kiểm tra định dạng code và ký tự khoảng trắng

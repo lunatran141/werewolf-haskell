@@ -18,11 +18,13 @@ library
     , Protocol.Analytics
     , Protocol.Types
     , Server.Broadcast
+    , Server.Config
     , Server.AnalyticsClient
     , Server.Connection
     , Server.GameLoop
     , Server.ReplayStore
     , Server.Room
+    , Server.RoomWorker
     , Server.SafeLog
     , Server.Supervisor
     , Server.WebSocket
@@ -102,6 +104,7 @@ test-suite x02-analytics-client-test
   ghc-options: -Wall -Wcompat -threaded
   build-depends:
       base >=4.17 && <5
+    , bytestring >=0.11
     , directory >=1.3
     , filepath >=1.4
     , hspec >=2.10
@@ -139,6 +142,17 @@ test-suite t13-release-hardening-test
     , hspec >=2.10
     , QuickCheck >=2.14
     , stm >=2.5 && <3
+    , werewolf-server
+
+test-suite server-config-test
+  type: exitcode-stdio-1.0
+  main-is: ServerConfigSpec.hs
+  hs-source-dirs: test
+  default-language: GHC2021
+  ghc-options: -Wall -Wcompat -threaded
+  build-depends:
+      base >=4.17 && <5
+    , hspec >=2.10
     , werewolf-server
 
 test-suite host-controls-test

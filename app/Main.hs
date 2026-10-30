@@ -2,8 +2,7 @@
 
 module Main (main) where
 
-import Control.Concurrent (killThread)
-import Control.Exception (SomeException, catch, finally)
+import Control.Concurrent.MVar (modifyMVar_)
 import Network.HTTP.Types (status200)
 import Network.Wai (Application, pathInfo, responseLBS)
 import Network.Wai.Handler.Warp (run)
@@ -19,28 +18,38 @@ import Server.AnalyticsClient
   , subscribeRoomAnalyticsWithReplay
   )
 import Server.ReplayStore (ReplayStore, newReplayStore)
-import Server.Room (RoomRegistry, RoomRuntime(..), newRoomRegistry)
+import Server.Room (RoomRegistry(..), RoomRuntime(..), newRoomRegistry)
+import Server.RoomWorker (startRoomWorkerGroup)
 import Server.SafeLog (logError, logInfo)
-import Server.Supervisor (Supervisor, forkSupervised, newSupervisor)
+import Server.Supervisor (forkSupervised, newSupervisor)
+import Server.Config (ServerConfig(..), loadServerConfig, renderConfigError)
 import Server.WebSocket (webSocketApp)
-import System.Environment (lookupEnv)
-import Text.Read (readMaybe)
+import System.Exit (ExitCode(ExitFailure), exitWith)
+import System.IO (hPutStrLn, stderr)
 
 main :: IO ()
 main = do
-  port <- maybe 8080 id . (>>= readMaybe) <$> lookupEnv "APP_PORT"
+  configResult <- loadServerConfig
+  serverConfig <- case configResult of
+    Left err -> do
+      let msg = renderConfigError err
+      hPutStrLn stderr msg
+      logError "game-server" "config_error" [("error", msg)]
+      exitWith (ExitFailure 1)
+    Right cfg -> pure cfg
+  let port = serverPort serverConfig
   registry <- newRoomRegistry
   supervisor <- newSupervisor
   analyticsPublisher <- newAnalyticsPublisherFromEnv
-  replayDirectory <- lookupEnv "REPLAY_DIR"
-  let replayStore = replayStoreFromDirectory replayDirectory
+
+  let replayStore = replayStoreFromDirectory (serverReplayDir serverConfig)
   _ <- forkSupervised supervisor "analytics-publisher" $
     runAnalyticsPublisher analyticsPublisher
 
   logInfo "game-server" "server_listening" [("port", show port)]
   run port
     (app registry
-      (startRoomWorker registry supervisor analyticsPublisher replayStore))
+      (startRoomWorker registry analyticsPublisher replayStore))
 
 replayStoreFromDirectory :: Maybe FilePath -> Maybe ReplayStore
 replayStoreFromDirectory (Just path)
@@ -49,21 +58,20 @@ replayStoreFromDirectory _ = Nothing
 
 startRoomWorker
   :: RoomRegistry
-  -> Supervisor
   -> AnalyticsPublisher
   -> Maybe ReplayStore
   -> RoomRuntime
   -> IO ()
-startRoomWorker registry supervisor analyticsPublisher replayStore room = do
+startRoomWorker registry analyticsPublisher replayStore room = do
   analyticsForwarder <-
     subscribeRoomAnalyticsWithReplay replayStore analyticsPublisher room
-  analyticsThread <- forkSupervised supervisor ("analytics-room-" ++ roomId room)
-    analyticsForwarder
-  _ <- forkSupervised supervisor ("game-loop-" ++ roomId room) $
-    (runRegisteredLobbyLoop registry room `catch` \(_ :: SomeException) ->
+  _ <- startRoomWorkerGroup (roomId room) analyticsForwarder
+    (runRegisteredLobbyLoop registry room)
+    (\_ -> do
       logError "game-server" "game_loop_stopped"
-        [("roomId", roomId room), ("errorClass", "unexpected_exception")])
-      `finally` killThread analyticsThread
+        [("roomId", roomId room), ("errorClass", "unexpected_exception")]
+      modifyMVar_ (registryRooms registry) $
+        pure . filter ((/= roomId room) . fst))
   pure ()
 
 app :: RoomRegistry -> (RoomRuntime -> IO ()) -> Application

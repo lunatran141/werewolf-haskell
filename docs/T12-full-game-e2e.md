@@ -51,5 +51,10 @@ cabal test --enable-tests t12-full-game-e2e-test
 | Ảnh GameOver/reveal | Chưa ghi | |
 | Video cùng một ván trên 2-3 browser | Chưa ghi | |
 
+> **Trạng thái minh chứng:** Các mục "Chưa ghi" ở bảng trên là ảnh/video chụp thủ công
+> trên 2-3 trình duyệt thật, chưa được thực hiện và chưa có bằng chứng. Quy trình thực hiện
+> xem [MANUAL_TEST_RUNBOOK.md](MANUAL_TEST_RUNBOOK.md); chỉ đánh dấu hoàn thành sau khi đã
+> lưu ảnh/video và điền đường dẫn vào bảng.
+
 Phần code T12 đạt gate khi test T12 và toàn bộ test Haskell đều PASS. Checklist
 trình duyệt là phần demo/minh chứng thực tế, không phải review chéo.

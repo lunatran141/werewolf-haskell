@@ -1,13 +1,15 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
--- | Kenh gui bat dong bo tu Game Server sang Analytics Worker.
--- Loi mang chi lam giu summary trong queue khong bao gio lam dung GameLoop.
+-- | Kenh gui bat dong bo tu Game Server sang Analytics Worker voi persistent spool.
 module Server.AnalyticsClient
   ( AnalyticsPublisher
+  , publisherSpoolDir
   , newAnalyticsPublisher
+  , newAnalyticsPublisherWithSpool
   , newAnalyticsPublisherFromEnv
   , publishMatchSummary
   , runAnalyticsPublisher
+  , recoverSpoolToQueue
   , subscribeRoomAnalytics
   , subscribeRoomAnalyticsWithReplay
   , matchSummaryForUpdate
@@ -25,7 +27,9 @@ import Control.Concurrent.STM
   , writeTBQueue
   )
 import Control.Exception (IOException, bracket, catch)
-import Control.Monad (forever)
+import Control.Monad (forM, forever, void)
+import qualified Data.ByteString as BS
+import Data.Maybe (catMaybes)
 import Network.Socket
   ( AddrInfo(..)
   , SocketType(Stream)
@@ -37,38 +41,110 @@ import Network.Socket
   , socket
   )
 import qualified Network.Socket.ByteString as SocketBS
-import System.Environment (lookupEnv)
+import System.Directory
+  ( createDirectoryIfMissing
+  , doesDirectoryExist
+  , listDirectory
+  , removeFile
+  )
+import System.FilePath ((</>), takeExtension)
 
 import Domain.Types (DomainEvent(..), GameState(..))
-import Protocol.Analytics (MatchSummary(..), encodeMatchSummaryLine)
-import Server.Room (RoomRuntime(..), RoomUpdate(..))
+import Protocol.Analytics
+  ( MatchSummary(..)
+  , decodeMatchSummaryLine
+  , encodeMatchSummaryLine
+  )
+import Server.Config
+  ( AnalyticsClientConfig(..)
+  , loadAnalyticsClientConfig
+  )
 import Server.ReplayStore
   ( ReplayStore
   , readReplay
   , renderStorageError
   , writeReplay
   )
+import Server.Room (RoomRuntime(..), RoomUpdate(..))
 import Server.SafeLog (logWarning)
 
 data AnalyticsPublisher = AnalyticsPublisher
-  { publisherHost :: String
-  , publisherPort :: String
-  , publisherQueue :: TBQueue MatchSummary
+  { publisherHost :: !String
+  , publisherPort :: !String
+  , publisherQueue :: !(TBQueue MatchSummary)
+  , publisherSpoolDir :: !FilePath
   }
 
 newAnalyticsPublisher :: String -> String -> IO AnalyticsPublisher
 newAnalyticsPublisher host port =
-  AnalyticsPublisher host port <$> newTBQueueIO 256
+  newAnalyticsPublisherWithSpool host port "analytics/spool"
+
+newAnalyticsPublisherWithSpool :: String -> String -> FilePath -> IO AnalyticsPublisher
+newAnalyticsPublisherWithSpool host port spoolDir = do
+  createDirectoryIfMissing True spoolDir
+  AnalyticsPublisher host port <$> newTBQueueIO 256 <*> pure spoolDir
 
 newAnalyticsPublisherFromEnv :: IO AnalyticsPublisher
 newAnalyticsPublisherFromEnv = do
-  host <- maybe "127.0.0.1" id <$> lookupEnv "ANALYTICS_HOST"
-  port <- maybe "9090" id <$> lookupEnv "ANALYTICS_PORT"
-  newAnalyticsPublisher host port
+  configResult <- loadAnalyticsClientConfig
+  case configResult of
+    Right cfg ->
+      newAnalyticsPublisherWithSpool
+        (clientTargetHost cfg)
+        (show (clientTargetPort cfg))
+        (clientSpoolDir cfg)
+    Left _ ->
+      newAnalyticsPublisherWithSpool "127.0.0.1" "9090" "analytics/spool"
 
--- | Non-blocking: queue day thi bo qua analytics, Game Server van tiep tuc.
+spoolFilePath :: FilePath -> String -> FilePath
+spoolFilePath dir mId =
+  dir </> (map safeChar mId ++ ".json")
+  where
+    safeChar c
+      | c `elem` ['a'..'z'] ++ ['A'..'Z'] ++ ['0'..'9'] ++ "-_" = c
+      | otherwise = '_'
+
+writeSpoolSummary :: FilePath -> MatchSummary -> IO ()
+writeSpoolSummary dir summary = do
+  createDirectoryIfMissing True dir
+  let path = spoolFilePath dir (matchId summary)
+  BS.writeFile path (encodeMatchSummaryLine summary)
+    `catch` \(_ :: IOException) -> pure ()
+
+deleteSpoolSummary :: FilePath -> String -> IO ()
+deleteSpoolSummary dir mId = do
+  let path = spoolFilePath dir mId
+  removeFile path `catch` \(_ :: IOException) -> pure ()
+
+recoverSpoolToQueue :: AnalyticsPublisher -> IO Int
+recoverSpoolToQueue publisher = do
+  let dir = publisherSpoolDir publisher
+  exists <- doesDirectoryExist dir
+  if not exists
+    then pure 0
+    else do
+      entries <- listDirectory dir `catch` \(_ :: IOException) -> pure []
+      let jsonFiles = filter (\f -> takeExtension f == ".json") entries
+      recovered <- fmap catMaybes $ forM jsonFiles $ \f -> do
+        let path = dir </> f
+        content <- (BS.readFile path >>= pure . decodeMatchSummaryLine)
+          `catch` \(_ :: IOException) -> pure (Left "read error")
+        case content of
+          Right summary -> pure (Just summary)
+          Left _ -> pure Nothing
+      enqueuedList <- atomically $ do
+        let queue = publisherQueue publisher
+        forM recovered $ \summary -> do
+          full <- isFullTBQueue queue
+          if full
+            then pure False
+            else writeTBQueue queue summary >> pure True
+      pure (length (filter id enqueuedList))
+
+-- | Non-blocking: luu spool truoc, sau do enqueue.
 publishMatchSummary :: AnalyticsPublisher -> MatchSummary -> IO Bool
-publishMatchSummary publisher summary =
+publishMatchSummary publisher summary = do
+  writeSpoolSummary (publisherSpoolDir publisher) summary
   atomically $ do
     let queue = publisherQueue publisher
     full <- isFullTBQueue queue
@@ -76,11 +152,15 @@ publishMatchSummary publisher summary =
       then pure False
       else writeTBQueue queue summary >> pure True
 
--- | Gui theo thu tu. Neu Worker vang mat, thu lai summary dau queue sau 2 giay.
+-- | Gui theo thu tu; xoa spool khi da nhan thanh cong.
 runAnalyticsPublisher :: AnalyticsPublisher -> IO ()
-runAnalyticsPublisher publisher = forever $ do
-  summary <- atomically (readTBQueue (publisherQueue publisher))
-  retryUntilDelivered summary
+runAnalyticsPublisher publisher = do
+  void (recoverSpoolToQueue publisher)
+  forever $ do
+    summary <- atomically (readTBQueue (publisherQueue publisher))
+    retryUntilDelivered summary
+    deleteSpoolSummary (publisherSpoolDir publisher) (matchId summary)
+    void (recoverSpoolToQueue publisher)
   where
     retryUntilDelivered summary = do
       delivered <-
@@ -113,7 +193,6 @@ sendSummary publisher summary = do
       connect connection (addrAddress address)
       pure connection
 
--- | Dang ky TChan truoc khi GameLoop bat dau de khong bo lo GameFinished.
 subscribeRoomAnalytics
   :: AnalyticsPublisher
   -> RoomRuntime
@@ -121,8 +200,6 @@ subscribeRoomAnalytics
 subscribeRoomAnalytics publisher room = do
   subscribeRoomAnalyticsWithReplay Nothing publisher room
 
--- | Ban X03 ghi replay da lam sach len shared storage truoc khi gui summary
--- cho Worker. Moi loi storage chi duoc log va khong chan GameLoop.
 subscribeRoomAnalyticsWithReplay
   :: Maybe ReplayStore
   -> AnalyticsPublisher
@@ -140,7 +217,7 @@ subscribeRoomAnalyticsWithReplay replayStore publisher room = do
         if accepted
           then pure ()
           else logWarning "analytics-publisher" "queue_full"
-            [("action", "summary_skipped")]
+            [("action", "summary_spooled")]
 
 persistSharedReplay :: Maybe ReplayStore -> MatchSummary -> IO ()
 persistSharedReplay Nothing _ = pure ()

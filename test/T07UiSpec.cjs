@@ -314,6 +314,18 @@ test('Có thể chọn mục tiêu Night Action trực tiếp bằng ô người
   assert.equal(get('seer-submit').disabled, false);
 });
 
+test('Tiên Tri không chọn được ô mục tiêu trong lượt Sói', () => {
+  const {get, message, players} = setup('Seer');
+  message({type: 'VotingSnapshot', roomId: 'R', phase: 'Night', day: 1,
+    players, hasVoted: false, canShoot: false, resolved: false, result: null});
+  message({type: 'NightTimeRemaining', roomId: 'R', day: 1,
+    stage: 'Wolves', remainingMs: 30_000});
+  const card = get('player-list').children[1];
+  assert.equal(card.classList.contains('is-targetable'), false);
+  assert.notEqual(get('seer-target').value, 'p2');
+  assert.equal(get('seer-submit').disabled, true);
+});
+
 test('Snapshot lịch sử từ Server dùng senderId/text và không nhân đôi tin đã nhận', () => {
   const {get, message} = setup();
   const chat = {day: 1, channel: 'PublicDay', messageId: 'm1', sequence: 5,

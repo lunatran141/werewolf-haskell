@@ -6,6 +6,7 @@ dist-newstyle/
 *.o
 *.exe
 analytics/*.jsonl
+analytics/spool/*.json
 shared/replays/*.json
 shared/replays/*.tmp*
 !shared/replays/.gitkeep

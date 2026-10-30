@@ -74,6 +74,7 @@ import Server.Room
   , newRoomRuntime
   )
 
+-- Pure turn coordination & transition rules
 -- Xac thuc PlayerId cua command voi phien ket noi.
 -- Lenh noi bo khong duoc gui truc tiep tu Browser.
 actorMatches :: QueuedCommand -> Bool
@@ -301,6 +302,7 @@ dispatchPlayerCommand state command =
     _ ->
       Left NotAuthorized
 
+-- Concurrency, STM queues & timer shell
 -- Xu ly mot command tu queue.
 -- State, version va events duoc commit trong cung STM.
 processNextLobbyCommand :: RoomRuntime -> IO ()
